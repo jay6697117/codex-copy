@@ -6,10 +6,10 @@
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
-    "dev": "vite --port 5173",
+    "dev": "BROWSERSLIST_CONFIG=./.browserslistrc vite --port 5173",
     "server": "node server/app-server.mjs",
     "start": "node scripts/start-all.mjs",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && BROWSERSLIST_CONFIG=./.browserslistrc vite build",
     "preview": "vite preview --port 4173",
     "electron:dev": "ELECTRON_START_URL=http://localhost:5173 electron electron/main.cjs",
     "electron:start": "npm run build && electron electron/main.cjs"
