@@ -1,33 +1,8 @@
-# OpenAI Codex Configuration (.codex/config.toml)
+# Project-level OpenAI Codex Configuration (.codex/config.toml)
+# Note: Model and provider settings are inherited directly from your global ~/.codex/config.toml
+# so your local Codex login, model (e.g. gpt-6-astra / gpt-5.4), and provider work seamlessly.
 
-model = "gpt-6.1-sol"
 personality = "pragmatic"
-reasoning_effort = "high"
-
-[sandbox]
-mode = "workspace-write"
-network_access = false
-approval_policy = "on-risk"
-allowed_commands = [
-  "git status",
-  "git diff",
-  "git log",
-  "git worktree list",
-  "npm test",
-  "npm run build",
-  "npx tsc --noEmit"
-]
-
-[agents]
-enable_subagents = true
-max_concurrent_threads_per_session = 6
-default_agent = "default"
-
-[app_server]
-listen = "stdio://"
-http_bridge_port = 4500
-experimental_api = true
-
-[skills]
-auto_select = true
-directories = [".codex/skills", "~/.codex/skills"]
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+model_reasoning_summary = "detailed"

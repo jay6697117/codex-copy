@@ -1,52 +1,34 @@
-# OpenAI Codex Desktop 深度优化方案（中英双语、Goal 目标模式、微信/QQ/钉钉三款皮肤与真实开发工作流验证）
-
-## 一、 广泛深入调研结论（Research Findings）
-
-### 1. 新版 OpenAI Codex Desktop 的 `Goal` 模式（替代旧版 `Plan` 模式）
-根据 OpenAI Codex 最新文档与专题指南（参考：[Codex `/goal` Guide — Kingy AI](https://kingy.ai/news/openai-codex-goal-the-new-long-horizon-mode-for-agentic-coding/)、[Codex `/goal`: Persistent Objectives — LaoZhang AI](https://blog.laozhang.ai/en/posts/codex-goal)、[How to use the Codex desktop app — Flavio Copes](https://flaviocopes.com/codex/)）：
-- **核心机制**：新版 Codex Desktop 将长周期自主工作收敛为 **Goal 模式（`/goal`）**。用户点击 Composer 底部的 **`Goal（目标）`** 按钮或输入 `/goal <持久目标描述>`，即可为当前会话绑定一个跨轮次的持久目标（Persistent Objective，上限 4,000 字符），包含期望结果、约束边界与可验证完成条件（Stopping Condition）。
-- **桌面端交互控件（Goal Progress Row）**：
-  - 当会话绑定了 Goal 后，在 Composer 正上方会常驻一条 **目标进度控制栏（Goal Bar）**，展示当前目标内容与状态（`进行中 Active` / `已暂停 Paused` / `已完成 Completed`）。
-  - 支持四大生命周期操作：
-    1. **查看/编辑目标（`编辑` / `/goal edit`）**：调整验收条件或目标范围。
-    2. **暂停目标（`暂停` / `/goal pause`）**：暂停长周期自主推进以审查代码 Diff。
-    3. **继续执行（`继续` / `/goal resume`）**：恢复已暂停的目标并继续推进下一轮。
-    4. **清除目标（`清除` / `/goal clear`）**：移除当前绑定的持久目标（保留已生成的文件改动）。
+# OpenAI Codex Desktop App — 深度审计与真实 Codex App 体验对齐方案 (`CODEX_DESKTOP_PLAN.md`)
 
 ---
 
-### 2. 微信皮肤、QQ皮肤、钉钉皮肤的设计规范与色彩体系调研
-通过对 [微信标准色彩指引](https://res.wx.qq.com/a/wx_fed/wedesign/res/2b7c/WeChat_Standard_Color_Guidelines_201703.pdf)、[腾讯 TDesign 色彩体系](http://tdesign.tencent.com/design/color)、[腾讯 QQ Design 官方色彩规范 (`qq.design`)](https://qq.design/design/Foundation/Color/) 与 [钉钉设计开放平台 OpenUI (`ding.design`)](https://ding.design/) 的深入调研，我们提炼出三款国民级桌面应用最具辨识度的视觉基因：
+## 一、 全面深度审计：为什么打包安装后的 App 与真实 Codex App 体验存在差异？
 
-| 皮肤维度 | 1. 微信皮肤 (`wechat` · 默认皮肤) | 2. QQ皮肤 (`qq` · 腾讯 QQ NT 风格) | 3. 钉钉皮肤 (`dingtalk` · 钉钉专业工作台风格) |
+通过对打包产物 (`Codex Desktop.app` / `Codex Desktop.exe`)、本地桥接层 (`server/codex-local-bridge.mjs`)、前端状态流 (`src/services/appServerClient.ts`) 与工作区配置文件 (`.codex/config.toml`) 的逐行审计，定位出以下 **6 个核心根因 (Root Causes)**：
+
+| 编号 | 问题现象 | 根本原因 (Root Cause) | 修复与优化方案 |
 | :--- | :--- | :--- | :--- |
-| **设计气质** | 温润克制、极简灰白分层、标志性微信绿与经典荧光绿聊天气泡 | 年轻灵动、通透冰川蓝灰背景、活力企鹅天蓝气泡与轻渐变高光 | 专业高效、深邃商务藏蓝侧栏与工作台、高对比科技蓝强调色 |
-| **主画布背景 (`--bg-app`)** | `#F5F5F5`（微信桌面版经典浅灰聊天底色） | `#F2F5FA`（QQ `@color_icon_general_04` `#EBEDF5` 冰蓝灰底色） | `#161E2E`（钉钉深色专业工作台底色） |
-| **左侧边栏 (`--bg-sidebar`)** | `#EAEAEA`（微信桌面版标志性中灰会话列表栏） | `#E8EEF8`（QQ NT 轻透雾蓝侧边栏） | `#101622`（钉钉企业级深海藏蓝导航栏） |
-| **顶部导航栏 (`--bg-header`)** | `rgba(245, 245, 245, 0.95)` + `#DCDCDC` 分割线 | `linear-gradient(90deg, #EBF2FC, #F5F8FD)` 毛玻璃顶栏 | `rgba(16, 22, 34, 0.94)` + `#26334D` 商务分割线 |
-| **卡片/AI气泡 (`--bg-card`)** | `#FFFFFF`（纯白客态卡片，配 `#E4E4E4` 细边框） | `#FFFFFF`（纯白圆润卡片，配 `#DCE4F2` 边框） | `#1E293E`（深蓝灰商务卡片，配 `#2C3B59` 边框） |
-| **用户发送气泡 (`--user-bubble-bg`)** | **`#95EC69`**（微信最具代表性的浅绿主态气泡，配 `#111111` 深色字） | **`#0099FF`**（QQ 官方 `@color_bubble_host` `#00CAFC/#0099FF` 蓝气泡，白字） | **`#0089FF`**（钉钉官方品牌蓝气泡，配 `#FFFFFF` 纯白字） |
-| **品牌主色/按钮 (`--accent-primary`)** | **`#07C160`**（微信标准品牌绿 WeChat Green） | **`#0099FF`**（QQ 品牌天蓝，辅以 `#02D8FC → #1FA5FF` 渐变） | **`#0089FF`**（钉钉标准商务蓝 DingTalk Blue） |
-| **主/次文字颜色** | `#191919` / `#5C5C5C` / `#888888` | `#03081A` / `#4E5670` / `#8E96B0` | `#F0F4FA` / `#A3B3CC` / `#6C7F9E` |
+| **RC-1** | **执行报错 (`执行报错`)：项目级 `.codex/config.toml` 污染本机配置** | 项目目录下 `.codex/config.toml` 残留了早期虚构配置 `model = "gpt-6.1-sol"` 及非官方 TOML 段 (`[app_server]`, `[skills]`, `reasoning_effort`)，且在打包时被复制进了 `Codex Desktop.app/Contents/Resources/app/.codex/config.toml`。真实 `codex` CLI 启动时会优先读取工作目录 `.codex/config.toml`，导致覆盖用户本机 `~/.codex/config.toml` (`model = "gpt-6-astra"`) 或触发 TOML 解析报错。 | 1. 清理 `.codex/config.toml` 中的虚构模型与非标字段，完全遵循 [OpenAI Codex `config.toml` 官方规范](https://learn.chatgpt.com/docs/config-file/config-reference)。<br>2. 在桥接层过滤掉任何历史残留的虚构模型名 (`gpt-6.1-sol`, `gpt-6-luna`)，优先使用本机 `~/.codex/config.toml` 中的真实模型。 |
+| **RC-2** | **执行报错 (`执行报错`)：`codex exec` 参数兼容性与 `stdin` 传递问题** | 1. 新建会话默认 `model` 被硬编码为 `'gpt-5.4'`，与本机 `~/.codex/config.toml` 的 `'gpt-6-astra'` 不一致，触发 `-m gpt-5.4`，若用户自定义 Provider 仅支持配置模型即报错。<br>2. `codex exec resume <id>` 子命令不支持部分顶层参数（如 `--skip-git-repo-check`、`-C`、`-s`），直接拼接会导致 CLI 退出码 2 ([Issue #6717](https://github.com/openai/codex/issues/6717))。<br>3. 多行 Prompt 作为命令行位置参数传递易受引号/换行截断。 | 1. 遵循 [OpenAI 非交互模式规范](https://learn.chatgpt.com/docs/non-interactive-mode)，改用 `codex exec --json -` 通过 **`stdin` 管道**安全写入完整 Prompt。<br>2. 默认模型设为跟随本机 `config.toml`（不额外传 `-m`），仅在用户显式切换其他模型时传 `-m`。<br>3. **智能三级回退重试机制**：若带 `resume` 或自定义 `-m`/`-c` 参数执行失败，自动回退为使用本机默认配置的 `codex exec --json --skip-git-repo-check -C <cwd> -` 无缝重试。 |
+| **RC-3** | **模型选择 (`模型选择`) 不真实、缺乏本机配置联动** | 底部模型选择器仅为原生 `<select>`，包含虚构模型名，且未读取 `~/.codex/models_cache.json` 或区分「本机 `config.toml` 默认模型」，也不支持自定义输入模型 ID 或同步回写 `config.toml`。 | 重构为 **官方风格模型选择弹窗 (Model Selector Popover)**：<br>1. 顶部置顶显示本机 `~/.codex/config.toml` 当前生效模型（如 `gpt-6-astra`）。<br>2. 自动扫描 `~/.codex/models_cache.json`、Profiles 与官方 Codex 模型列表 (`gpt-5.4`, `gpt-5.4-mini`, `gpt-5.3-codex`, `gpt-5.2-codex`, `gpt-5.1-codex-max`, `gpt-5.1-codex-mini`, `o3`, `o4-mini`)。<br>3. 支持手动输入任意自定义模型 ID，并支持一键「保存为本机默认模型」。 |
+| **RC-4** | **模型推理程度选择 (`模型推理程度选择`) 被截断失效** | 1. `codex.ts` 定义了 `'max'`，而 `CenterThreadView.tsx` 使用了 `'xhigh'`，类型不一致。<br>2. `server/codex-local-bridge.mjs` 第 723 行硬编码 `reasoningEffort === 'low' \|\| reasoningEffort === 'medium' ? reasoningEffort : 'high'`，导致用户选择 `超高 (xhigh)` 或 `极速 (minimal)` 时被强制改写为 `high`！ | 遵循 [OpenAI Codex 推理等级规范](https://kingy.ai/news/openai-codex-reasoning-levels-low-medium-high-extra-high/) 与 [Issue #26930](https://github.com/openai/codex/issues/26930)：<br>1. 统一支持 `minimal` (极速)、`low` (低/Light)、`medium` (中)、`high` (高)、`xhigh` (超高/Extra High) 五档推理程度。<br>2. 重构底部 **推理程度选择弹窗 (Reasoning Effort Popover)**，准确传递 `-c model_reasoning_effort="<level>"`。 |
+| **RC-5** | **推理 Thinking 过程 (`推理thinking过程`) 不显示或杂乱** | 1. 根据 [Codex `exec --json` 事件规范](https://takopi.dev/reference/runners/codex/exec-json-cheatsheet/)，必须启用 `model_reasoning_summary` (`auto` / `detailed`) 才会输出 `reasoning` 事件。<br>2. 前端把 `stderr.delta` 的 CLI 内部日志直接塞入 `reasoningSteps`，且默认折叠了思考卡片 (`isExpanded = false`)，无实时计时器。 | 1. 桥接层默认注入 `-c model_reasoning_summary="detailed"`，完整解析 `item.type === 'reasoning'`（含 `text` / `summary`）、`todo_list` 与 `command_execution`。<br>2. **思考过程流式展开 + 实时秒表计时**：思考进行中 (`streaming`) 自动展开显示最新推理标题与步骤，秒表实时跳动（`正在思考 3s...`），完成后展示 `已思考 Xs · N 个步骤` 并支持折叠。 |
+| **RC-6** | **打包安装后 (`Codex Desktop.app`) 端口冲突与工作目录问题** | 1. `CodexDesktopMac.m` 启动内嵌服务时若 4500 端口被旧进程占用，会导致启动失败或连上旧服务。<br>2. 安装到 `/Applications` 后，默认 `cwd` 指向了 `/Applications/Codex Desktop.app/Contents/Resources/app` 而非用户真实代码仓库。 | 1. `app-server.mjs` 与 `CodexDesktopMac.m` 增加旧端口清理与动态端口健康校验，通过 `/bin/zsh -ilc "which node"` 确保找到本机 Node。<br>2. 默认工作区自动定位到用户真实项目目录，并在侧边栏/顶栏新增 **「切换/添加本地项目目录」** 功能。 |
 
 ---
 
-### 3. 中英双语国际化架构（默认中文，设置中切换英文）
-- 建立完整的 `src/i18n/translations.ts` 字典体系，支持：
-  - **`zh-CN`（简体中文，默认）**：所有导航栏（`新建会话`、`自动化任务`、`技能中心`、`待审队列`、`工作树 (Worktrees)`、`设置与本机配置`）、顶部工具栏（`在 Cursor 中打开`、`提交代码`、`审查改动`）、Composer 控件（`目标模式 /goal`、`本地工作区 / 独立工作树`、`默认权限 / 只读模式 / 完全访问`、`推理强度：高`）以及设置中心全中文呈现。
-  - **`en-US`（English）**：完整保留官方英文原版术语，可在 **设置 (Settings)** 页面中一键切换，状态持久化至 `localStorage`。
-- **界面减负**：将原有的顶部换肤按钮移入 **设置 (Settings)** 页面，与语言切换并列排布，释放顶部 Header 空间，避免遮挡项目与会话标题。
+## 二、 实施计划 (`Phase 3 & Phase 4`)
 
----
-
-### 4. 真实本机 Codex 开发能力验证与冗余清理计划
-1. **优化本机 `codex` CLI 调用兼容性（`server/codex-local-bridge.mjs`）**：
-   - 使用交互式登录 Shell（`/bin/zsh -ilc "which codex"`）确保加载 `.zshrc` / `.zprofile` 中的 PATH。
-   - 当用户选择的模型与本机 `~/.codex/config.toml` 默认模型（如 `gpt-6-astra`）一致时，自动交由本机 `config.toml` 驱动，避免多余参数冲突；将 `max` 推理强度安全映射为 `high`，确保所有版本 `codex exec --json` 稳定运行。
-   - 在 Goal 模式下，自动将当前线程绑定的持久目标（Objective）与完成准则注入 `codex exec` 上下文。
-2. **真实开发测试闭环**：
-   - 通过应用后端接口与本机环境联动，执行真实的开发指令、文件读写与 `git status` / `git diff` 校验。
-3. **全面清理测试与不必要的功能组件**：
-   - 删除未使用的旧版顶栏组件 `src/components/TopCommandBar.tsx`。
-   - 删除与核心开发工作台无关的 3D 游戏演示组件 `src/components/VoxelVelocityGame.tsx`。
-   - 清理 `src/data/initialCodexData.ts` 中虚构的 `voxel-velocity-3d`、`app-server-harness` 假项目与冗余英文演示历史，仅保留当前真实本地仓库 `codex-test` 与本机 `~/.codex/sessions` 真实历史会话。
+1. **清理并规范化 `.codex/config.toml`**
+   - 移除 `.codex/config.toml` 中的 `model = "gpt-6.1-sol"` 与非标 TOML 块，确保本机 `~/.codex/config.toml` 配置 100% 生效。
+2. **重构 `server/codex-local-bridge.mjs` 与 `server/api-router.mjs`**
+   - 新增 `~/.codex/models_cache.json` 与本机可用模型自动发现接口。
+   - 完整支持 `minimal` | `low` | `medium` | `high` | `xhigh` 推理等级与 `model_reasoning_summary="detailed"`。
+   - 改用 `stdin` 管道向 `codex exec --json` 传递 Prompt，实现 `resume` 失败自动回退与参数不兼容自动重试机制。
+   - 新增 `/api/workspace/select` 接口支持切换任意本地文件夹作为项目工作区。
+3. **重构前端模型选择器、推理程度选择器与 Thinking 思考流 (`src/components/CenterThreadView.tsx`, `src/services/appServerClient.ts`, `src/App.tsx`)**
+   - 实现官方风格的模型选择上拉菜单（支持跟随 `config.toml`、切换官方/本机模型、自定义模型 ID、一键写入 `config.toml`）与推理程度选择菜单。
+   - 实现实时展开的 Thinking 思考流卡片（带实时计时器、加粗阶段标题提取、步骤时间线）与 `todo_list` 进度清单渲染。
+4. **重新构建 macOS 与 Windows 安装包并实测验证 (`scripts/package-desktop.mjs`)**
+   - 优化 `CodexDesktopMac.m` 的 Node 探测（支持 `/bin/zsh -ilc "which node"`）、端口冲突自动接管与真实项目路径传递。
+   - 运行 `npm run package` 重新生成 `Codex Desktop.app`、`.pkg`、`.zip` 与 Windows `.exe`、`.zip`，并进行全链路实测验证。

@@ -34,6 +34,8 @@ import {
   Play,
   Edit3,
   Trash2,
+  BrainCircuit,
+  ListChecks,
 } from 'lucide-react';
 import {
   AppLanguage,
@@ -95,7 +97,8 @@ interface CenterThreadViewProps {
         | 'permissionMode'
         | 'goal'
       >
-    >
+    >,
+    syncToGlobalConfig?: boolean
   ) => void;
   onSendMessage: (params: {
     prompt: string;
@@ -167,14 +170,23 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
   const [showSkillPicker, setShowSkillPicker] = useState(false);
   const [showFilePicker, setShowFilePicker] = useState(false);
   const [showSlashMenu, setShowSlashMenu] = useState(false);
+  const [showModelMenu, setShowModelMenu] = useState(false);
+  const [showEffortMenu, setShowEffortMenu] = useState(false);
+  const [customModelInput, setCustomModelInput] = useState('');
+  const [syncModelToConfig, setSyncModelToConfig] = useState(true);
   const [selectedIde, setSelectedIde] = useState<string>('cursor');
   const [showIdeMenu, setShowIdeMenu] = useState(false);
   const [showCommitMenu, setShowCommitMenu] = useState(false);
   const [quickCommitMsg, setQuickCommitMsg] = useState('');
   const [editingGoal, setEditingGoal] = useState(false);
   const [goalDraft, setGoalDraft] = useState(thread.goal?.objective || '');
+  const [liveThinkingTick, setLiveThinkingTick] = useState(1);
 
   const scrollEndRef = useRef<HTMLDivElement>(null);
+
+  const isRunning = thread.status === 'running';
+  const envMode: ExecutionEnvironmentMode = thread.environmentMode || 'local';
+  const permMode: PermissionMode = thread.permissionMode || 'workspace-write';
 
   useEffect(() => {
     scrollEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -187,26 +199,81 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
     }
   }, [thread.id, thread.goal?.objective, thread.goal?.status]);
 
-  const isRunning = thread.status === 'running';
-  const envMode: ExecutionEnvironmentMode = thread.environmentMode || 'local';
-  const permMode: PermissionMode = thread.permissionMode || 'workspace-write';
+  // Live 1-second timer while Codex is actively thinking/running
+  useEffect(() => {
+    if (!isRunning) {
+      setLiveThinkingTick(1);
+      return;
+    }
+    const timer = setInterval(() => {
+      setLiveThinkingTick((prev) => prev + 1);
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [isRunning]);
 
-  const configuredModel = localCodexStatus?.config?.effective?.model;
+  const configuredModel = localCodexStatus?.config?.effective?.model || 'gpt-5.4';
+  const serverAvailableModels = localCodexStatus?.config?.effective?.availableModels || [];
   const availableModels = Array.from(
     new Set(
       [
         configuredModel,
+        thread.model,
+        ...serverAvailableModels,
         'gpt-5.4',
+        'gpt-5.4-mini',
         'gpt-5.3-codex',
-        'gpt-6-astra',
+        'gpt-5.2-codex',
+        'gpt-5.1-codex-max',
+        'gpt-5.1-codex-mini',
         'o3',
         'o4-mini',
-      ].filter(Boolean) as string[]
+      ].filter((m) => m && m !== 'gpt-6.1-sol' && m !== 'gpt-6-luna') as string[]
     )
   );
 
-  const toggleItemExpand = (itemId: string) => {
-    setExpandedItems((prev) => ({ ...prev, [itemId]: !prev[itemId] }));
+  const effortOptions: Array<{
+    id: ReasoningEffort;
+    label: string;
+    shortLabel: string;
+    desc: string;
+  }> = [
+    {
+      id: 'minimal',
+      label: i18n.thread.effortMinimal,
+      shortLabel: lang === 'zh-CN' ? '推理：极速' : 'Minimal',
+      desc: i18n.thread.effortMinimalDesc,
+    },
+    {
+      id: 'low',
+      label: i18n.thread.effortLow,
+      shortLabel: lang === 'zh-CN' ? '推理：低' : 'Low',
+      desc: i18n.thread.effortLowDesc,
+    },
+    {
+      id: 'medium',
+      label: i18n.thread.effortMedium,
+      shortLabel: lang === 'zh-CN' ? '推理：中' : 'Medium',
+      desc: i18n.thread.effortMediumDesc,
+    },
+    {
+      id: 'high',
+      label: i18n.thread.effortHigh,
+      shortLabel: lang === 'zh-CN' ? '推理：高' : 'High',
+      desc: i18n.thread.effortHighDesc,
+    },
+    {
+      id: 'xhigh',
+      label: i18n.thread.effortExtraHigh,
+      shortLabel: lang === 'zh-CN' ? '推理：超高' : 'Extra High',
+      desc: i18n.thread.effortExtraHighDesc,
+    },
+  ];
+
+  const currentEffortMeta =
+    effortOptions.find((e) => e.id === thread.reasoningEffort) || effortOptions[3];
+
+  const toggleItemExpand = (itemId: string, currentlyOpen: boolean) => {
+    setExpandedItems((prev) => ({ ...prev, [itemId]: !currentlyOpen }));
   };
 
   const handleSaveGoal = (objectiveText: string, status: ThreadGoal['status'] = 'active') => {
@@ -260,6 +327,9 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
     const trimmed = (overridePrompt ?? composerText).trim();
     if (!trimmed) return;
 
+    setShowModelMenu(false);
+    setShowEffortMenu(false);
+
     if (trimmed === '/personality') {
       const nextMode: PersonalityMode =
         thread.personality === 'pragmatic' ? 'empathetic' : 'pragmatic';
@@ -268,7 +338,6 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
       return;
     }
 
-    // Handle `/goal` commands per OpenAI Codex Desktop Goal mode specification
     if (trimmed === '/goal' || trimmed.startsWith('/goal ')) {
       const arg = trimmed.slice(5).trim();
       if (!arg || arg === 'status') {
@@ -301,7 +370,6 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
         setComposerText('');
         return;
       }
-      // `/goal <objective>`: set persistent goal and immediately start working toward it
       handleSaveGoal(arg, 'active');
       onSendMessage({
         prompt: arg,
@@ -430,8 +498,21 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
     });
   };
 
+  const extractLatestHeadline = (steps?: string[]): string => {
+    if (!steps || steps.length === 0) return '';
+    const last = steps[steps.length - 1] || '';
+    const boldMatch = last.match(/\*\*(.+?)\*\*/);
+    if (boldMatch) return boldMatch[1];
+    const firstLine = last.split('\n')[0].trim();
+    return firstLine.length > 52 ? `${firstLine.slice(0, 52)}...` : firstLine;
+  };
+
   const renderTurnItem = (turnId: string, item: TurnItem) => {
-    const isExpanded = !!expandedItems[item.id];
+    // Auto-expand reasoning while streaming so the user sees the live thinking process
+    const isExpanded =
+      expandedItems[item.id] !== undefined
+        ? expandedItems[item.id]
+        : item.status === 'streaming';
 
     switch (item.type) {
       case 'userMessage':
@@ -485,35 +566,113 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
           </div>
         );
 
-      case 'reasoning':
+      case 'reasoning': {
+        const stepsCount = item.reasoningSteps?.length || 0;
+        const latestHeadline = extractLatestHeadline(item.reasoningSteps);
+        const displaySeconds =
+          item.status === 'streaming'
+            ? Math.max(item.durationSeconds || 1, liveThinkingTick)
+            : item.durationSeconds ?? 1;
+
         return (
-          <div key={item.id} className="py-0.5">
+          <div
+            key={item.id}
+            className="rounded-xl codex-card border codex-border overflow-hidden transition-all"
+          >
             <button
-              onClick={() => toggleItemExpand(item.id)}
-              className="inline-flex items-center gap-1.5 text-xs codex-text-muted hover:codex-text-primary transition-colors"
+              onClick={() => toggleItemExpand(item.id, isExpanded)}
+              className="w-full px-3.5 py-2 flex items-center justify-between gap-2 text-xs codex-text-secondary codex-hover transition-colors"
             >
-              {item.status === 'streaming' ? (
-                <Loader2 className="w-3.5 h-3.5 codex-accent-text animate-spin" />
-              ) : (
-                <ChevronRight
-                  className={`w-3.5 h-3.5 transition-transform ${isExpanded ? 'rotate-90' : ''}`}
-                />
-              )}
-              <span className="font-medium">
-                {item.status === 'streaming'
-                  ? i18n.thread.thinking
-                  : `${i18n.thread.thoughtFor} ${item.durationSeconds ?? 1}s`}
-              </span>
+              <div className="flex items-center gap-2 min-w-0">
+                {item.status === 'streaming' ? (
+                  <Loader2 className="w-3.5 h-3.5 codex-accent-text animate-spin shrink-0" />
+                ) : (
+                  <BrainCircuit className="w-3.5 h-3.5 codex-accent-text shrink-0" />
+                )}
+                <span className="font-medium codex-text-primary shrink-0">
+                  {item.status === 'streaming'
+                    ? `${i18n.thread.thinking} (${displaySeconds}s)...`
+                    : `${i18n.thread.thoughtFor} ${displaySeconds}s`}
+                </span>
+                {latestHeadline && (
+                  <span className="codex-text-muted truncate text-[11.5px]">
+                    · {latestHeadline}
+                  </span>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0">
+                {stepsCount > 0 && (
+                  <span className="text-[10px] font-mono px-1.5 py-0.2 rounded codex-elevated border codex-border codex-text-muted">
+                    {stepsCount} {i18n.thread.reasoningStepsUnit}
+                  </span>
+                )}
+                {isExpanded ? (
+                  <ChevronDown className="w-3.5 h-3.5 codex-text-muted" />
+                ) : (
+                  <ChevronRight className="w-3.5 h-3.5 codex-text-muted" />
+                )}
+              </div>
             </button>
-            {isExpanded && item.reasoningSteps && (
-              <div className="mt-1.5 pl-4 border-l-2 codex-border space-y-1 text-xs codex-text-secondary font-mono">
+
+            {isExpanded && item.reasoningSteps && item.reasoningSteps.length > 0 && (
+              <div className="px-3.5 py-2.5 border-t codex-border space-y-2 text-xs codex-text-secondary bg-black/[0.02]">
                 {item.reasoningSteps.map((step, idx) => (
-                  <div key={idx} className="leading-relaxed">
-                    {step}
+                  <div
+                    key={idx}
+                    className="pl-3 border-l-2 border-[var(--accent-color)]/40 leading-relaxed space-y-1"
+                  >
+                    {step.split('\n').map((line, lIdx) => (
+                      <div key={lIdx}>{renderInlineFormatting(line)}</div>
+                    ))}
                   </div>
                 ))}
               </div>
             )}
+          </div>
+        );
+      }
+
+      case 'todoList':
+        return (
+          <div
+            key={item.id}
+            className="rounded-xl codex-card border codex-border p-3 space-y-2 text-xs"
+          >
+            <div className="flex items-center justify-between">
+              <span className="font-semibold codex-text-primary flex items-center gap-1.5">
+                <ListChecks className="w-3.5 h-3.5 codex-accent-text" />
+                <span>{i18n.thread.todoChecklistTitle}</span>
+              </span>
+              <span className="text-[10px] font-mono codex-text-muted">
+                {(item.todoItems || []).filter((tItem) => tItem.completed).length}/
+                {(item.todoItems || []).length}
+              </span>
+            </div>
+            <div className="space-y-1">
+              {(item.todoItems || []).map((tItem, idx) => (
+                <div key={idx} className="flex items-center gap-2">
+                  <span
+                    className={`w-3.5 h-3.5 rounded flex items-center justify-center border ${
+                      tItem.completed
+                        ? 'codex-accent-btn border-transparent'
+                        : 'codex-border codex-elevated'
+                    }`}
+                  >
+                    {tItem.completed && <Check className="w-2.5 h-2.5" />}
+                  </span>
+                  <span
+                    className={
+                      tItem.completed
+                        ? 'line-through codex-text-muted'
+                        : 'codex-text-primary'
+                    }
+                  >
+                    {tItem.text}
+                  </span>
+                </div>
+              ))}
+            </div>
           </div>
         );
 
@@ -536,7 +695,7 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
             className="rounded-xl codex-card border codex-border overflow-hidden text-xs font-mono"
           >
             <button
-              onClick={() => toggleItemExpand(item.id)}
+              onClick={() => toggleItemExpand(item.id, isExpanded)}
               className="w-full px-3 py-2 flex items-center justify-between codex-text-secondary codex-hover transition-colors"
             >
               <span className="flex items-center gap-2 truncate">
@@ -1179,6 +1338,158 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
             </div>
           )}
 
+          {/* Popover: Official Codex Model Selector Menu */}
+          {showModelMenu && (
+            <div className="absolute bottom-full left-12 mb-2 w-80 rounded-xl codex-elevated border codex-border shadow-2xl p-2 z-30 space-y-2">
+              <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider codex-text-muted flex items-center justify-between">
+                <span>{i18n.thread.selectModelTitle}</span>
+                <button onClick={() => setShowModelMenu(false)}>
+                  <X className="w-3 h-3" />
+                </button>
+              </div>
+
+              <div className="max-h-56 overflow-y-auto space-y-0.5">
+                {availableModels.map((m) => {
+                  const isCurrent = thread.model === m;
+                  const isConfigDefault = m === configuredModel;
+                  return (
+                    <button
+                      key={m}
+                      type="button"
+                      onClick={() => {
+                        onUpdateThreadConfig(
+                          thread.id,
+                          { model: m as ModelId },
+                          syncModelToConfig
+                        );
+                        setShowModelMenu(false);
+                      }}
+                      className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs flex items-center justify-between transition-colors ${
+                        isCurrent
+                          ? 'codex-active codex-text-primary font-medium'
+                          : 'codex-text-secondary codex-hover'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        <Cpu className="w-3.5 h-3.5 codex-accent-text shrink-0" />
+                        <span className="font-mono truncate">{m}</span>
+                        {isConfigDefault && (
+                          <span className="text-[10px] px-1.5 py-0.2 rounded codex-accent-soft shrink-0">
+                            {i18n.thread.configDefaultBadge}
+                          </span>
+                        )}
+                      </div>
+                      {isCurrent && <Check className="w-3.5 h-3.5 codex-accent-text shrink-0" />}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Custom Model ID Input */}
+              <div className="pt-1.5 border-t codex-border space-y-1.5">
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="text"
+                    value={customModelInput}
+                    onChange={(e) => setCustomModelInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        if (customModelInput.trim()) {
+                          onUpdateThreadConfig(
+                            thread.id,
+                            { model: customModelInput.trim() },
+                            syncModelToConfig
+                          );
+                          setCustomModelInput('');
+                          setShowModelMenu(false);
+                        }
+                      }
+                    }}
+                    placeholder={i18n.thread.customModelPlaceholder}
+                    className="flex-1 px-2 py-1 rounded-lg codex-card border codex-border text-xs font-mono codex-text-primary focus:outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (customModelInput.trim()) {
+                        onUpdateThreadConfig(
+                          thread.id,
+                          { model: customModelInput.trim() },
+                          syncModelToConfig
+                        );
+                        setCustomModelInput('');
+                        setShowModelMenu(false);
+                      }
+                    }}
+                    className="px-2.5 py-1 rounded-lg codex-accent-btn text-xs font-medium shrink-0"
+                  >
+                    {i18n.thread.applyCustomModel}
+                  </button>
+                </div>
+
+                <label className="flex items-center gap-1.5 px-1 text-[11px] codex-text-muted cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={syncModelToConfig}
+                    onChange={(e) => setSyncModelToConfig(e.target.checked)}
+                  />
+                  <span>{i18n.thread.syncToConfigToml}</span>
+                </label>
+              </div>
+            </div>
+          )}
+
+          {/* Popover: Official Codex 5-Level Reasoning Effort Menu */}
+          {showEffortMenu && (
+            <div className="absolute bottom-full left-36 mb-2 w-80 rounded-xl codex-elevated border codex-border shadow-2xl p-2 z-30 space-y-1">
+              <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider codex-text-muted flex items-center justify-between">
+                <span>{i18n.thread.selectEffortTitle}</span>
+                <button onClick={() => setShowEffortMenu(false)}>
+                  <X className="w-3 h-3" />
+                </button>
+              </div>
+
+              {effortOptions.map((opt) => {
+                const isSelected = thread.reasoningEffort === opt.id;
+                return (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => {
+                      onUpdateThreadConfig(
+                        thread.id,
+                        { reasoningEffort: opt.id },
+                        syncModelToConfig
+                      );
+                      setShowEffortMenu(false);
+                    }}
+                    className={`w-full text-left px-2.5 py-2 rounded-lg transition-colors flex items-start justify-between gap-2 ${
+                      isSelected
+                        ? 'codex-active codex-text-primary'
+                        : 'codex-text-secondary codex-hover'
+                    }`}
+                  >
+                    <div className="space-y-0.5">
+                      <div className="text-xs font-medium codex-text-primary flex items-center gap-1.5">
+                        <span>{opt.label}</span>
+                        <span className="text-[10px] font-mono px-1.5 py-0.2 rounded codex-card border codex-border codex-text-muted">
+                          {opt.id}
+                        </span>
+                      </div>
+                      <div className="text-[11px] codex-text-muted leading-snug">
+                        {opt.desc}
+                      </div>
+                    </div>
+                    {isSelected && (
+                      <Check className="w-3.5 h-3.5 codex-accent-text shrink-0 mt-0.5" />
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
           {/* Popover: `/` Slash Commands Menu */}
           {showSlashMenu && (
             <div className="absolute bottom-full left-0 mb-2 w-80 rounded-xl codex-elevated border codex-border shadow-2xl p-1.5 z-30">
@@ -1346,7 +1657,7 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
               className="w-full bg-transparent text-[13.5px] codex-text-primary placeholder:codex-text-muted focus:outline-none resize-none leading-relaxed"
             />
 
-            {/* Official Codex Bottom Control Row: `+`, `Goal` (`/goal`), Model, Effort, Local/Worktree, Permissions, Branch, Send */}
+            {/* Official Codex Bottom Control Row: `+`, `Goal` (`/goal`), Model Popover, 5-Level Effort Popover, Local/Worktree, Permissions, Branch, Send */}
             <div className="flex items-center justify-between gap-2 pt-1 flex-wrap">
               <div className="flex items-center gap-1.5 flex-wrap">
                 {/* `+` Attach File / Skill Button */}
@@ -1355,6 +1666,8 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
                   onClick={() => {
                     setShowFilePicker((v) => !v);
                     setShowSkillPicker(false);
+                    setShowModelMenu(false);
+                    setShowEffortMenu(false);
                   }}
                   title={i18n.thread.attachContextTitle}
                   className="p-1.5 rounded-lg codex-text-secondary codex-hover transition-colors"
@@ -1379,49 +1692,45 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
                   <span>{i18n.thread.goalMode}</span>
                 </button>
 
-                {/* Model Selector */}
-                <div className="inline-flex items-center gap-1 px-2 py-1 rounded-lg codex-text-secondary codex-hover text-xs">
-                  <select
-                    value={thread.model}
-                    onChange={(e) =>
-                      onUpdateThreadConfig(thread.id, { model: e.target.value as ModelId })
-                    }
-                    className="bg-transparent text-xs font-medium codex-text-secondary hover:codex-text-primary focus:outline-none cursor-pointer"
-                  >
-                    {availableModels.map((m) => (
-                      <option key={m} value={m} className="bg-neutral-900 text-white">
-                        {m}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+                {/* Model Selector Pill (Opens Official Model Popover) */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowModelMenu((v) => !v);
+                    setShowEffortMenu(false);
+                    setShowFilePicker(false);
+                  }}
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${
+                    showModelMenu
+                      ? 'codex-active codex-text-primary'
+                      : 'codex-text-secondary codex-hover'
+                  }`}
+                  title={i18n.thread.selectModelTitle}
+                >
+                  <Cpu className="w-3.5 h-3.5 codex-accent-text" />
+                  <span className="font-mono">{thread.model || configuredModel}</span>
+                  <ChevronDown className="w-3 h-3 codex-text-muted" />
+                </button>
 
-                {/* Reasoning Effort Selector */}
-                <div className="inline-flex items-center gap-1 px-2 py-1 rounded-lg codex-text-secondary codex-hover text-xs">
+                {/* 5-Level Reasoning Effort Selector Pill (Opens Official Effort Popover) */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowEffortMenu((v) => !v);
+                    setShowModelMenu(false);
+                    setShowFilePicker(false);
+                  }}
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${
+                    showEffortMenu
+                      ? 'codex-active codex-text-primary'
+                      : 'codex-text-secondary codex-hover'
+                  }`}
+                  title={i18n.thread.selectEffortTitle}
+                >
                   <Gauge className="w-3.5 h-3.5 codex-text-muted" />
-                  <select
-                    value={thread.reasoningEffort}
-                    onChange={(e) =>
-                      onUpdateThreadConfig(thread.id, {
-                        reasoningEffort: e.target.value as ReasoningEffort,
-                      })
-                    }
-                    className="bg-transparent text-xs codex-text-secondary hover:codex-text-primary focus:outline-none cursor-pointer"
-                  >
-                    <option value="low" className="bg-neutral-900 text-white">
-                      {i18n.thread.effortLow}
-                    </option>
-                    <option value="medium" className="bg-neutral-900 text-white">
-                      {i18n.thread.effortMedium}
-                    </option>
-                    <option value="high" className="bg-neutral-900 text-white">
-                      {i18n.thread.effortHigh}
-                    </option>
-                    <option value="xhigh" className="bg-neutral-900 text-white">
-                      {i18n.thread.effortExtraHigh}
-                    </option>
-                  </select>
-                </div>
+                  <span>{currentEffortMeta.shortLabel}</span>
+                  <ChevronDown className="w-3 h-3 codex-text-muted" />
+                </button>
 
                 {/* Execution Target Selector: Local vs Worktree */}
                 <div className="inline-flex items-center gap-1 px-2 py-1 rounded-lg codex-text-secondary codex-hover text-xs">

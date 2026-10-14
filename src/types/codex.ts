@@ -20,7 +20,7 @@ export type ModelId = string;
 
 export type PersonalityMode = 'pragmatic' | 'empathetic';
 
-export type ReasoningEffort = 'low' | 'medium' | 'high' | 'max';
+export type ReasoningEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 
 export type ComposerMode = 'agent' | 'goal' | 'review';
 
@@ -85,6 +85,7 @@ export interface LocalCodexStatus {
       approvalPolicy: string;
       sandboxMode: string;
       personality: string;
+      availableModels?: string[];
       modelProviders: Record<string, Record<string, unknown>>;
       mcpServers: Record<string, Record<string, unknown>>;
       projects: Record<string, Record<string, unknown>>;
@@ -165,6 +166,7 @@ export interface FileDiff {
 export type TurnItemType =
   | 'userMessage'
   | 'reasoning'
+  | 'todoList'
   | 'subagentRun'
   | 'commandExecution'
   | 'fileChange'
@@ -190,6 +192,7 @@ export interface TurnItem {
   invokedSkills?: string[];
   durationSeconds?: number;
   reasoningSteps?: string[];
+  todoItems?: Array<{ text: string; completed: boolean }>;
   subagentName?: string;
   subagentTask?: string;
   subagentTokens?: string;

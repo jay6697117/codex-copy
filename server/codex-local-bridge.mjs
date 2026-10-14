@@ -1,8 +1,10 @@
 /**
- * Local Machine OpenAI Codex CLI & Configuration Bridge
- * Reads real ~/.codex/auth.json, ~/.codex/config.toml, ~/.codex/sessions, ~/.codex/skills,
- * detects the local `codex` binary, streams real `codex exec --json` model/agent execution,
- * and performs real Git diff/status/worktree/commit and macOS IDE `open -a` operations.
+ * Cross-Platform (macOS & Windows) OpenAI Codex CLI & Configuration Bridge
+ * Reads real ~/.codex/auth.json (%USERPROFILE%\.codex\auth.json on Windows),
+ * ~/.codex/config.toml, ~/.codex/models_cache.json, ~/.codex/sessions, ~/.codex/skills,
+ * detects the local `codex` binary (`codex` on macOS/Linux, `codex.cmd`/`codex.exe` on Windows),
+ * streams real `codex exec --json` model/agent execution with stdin piping and automatic fallback retry,
+ * and performs real Git diff/status/worktree/commit and cross-platform IDE launching.
  */
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
@@ -13,10 +15,45 @@ import { promisify } from 'node:util';
 import readline from 'node:readline';
 
 const execAsync = promisify(exec);
+const IS_WIN = process.platform === 'win32';
 
 const activeTurnProcesses = new Map();
 
+const LEGACY_MOCK_MODELS = new Set(['gpt-6.1-sol', 'gpt-6-luna']);
+
+const OFFICIAL_CODEX_MODELS = [
+  'gpt-5.4',
+  'gpt-5.4-mini',
+  'gpt-5.3-codex',
+  'gpt-5.2-codex',
+  'gpt-5.1-codex-max',
+  'gpt-5.1-codex-mini',
+  'o3',
+  'o4-mini',
+];
+
+const VALID_REASONING_EFFORTS = new Set(['minimal', 'low', 'medium', 'high', 'xhigh']);
+
+export function stripAnsi(str) {
+  if (!str || typeof str !== 'string') return '';
+  return str.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, '');
+}
+
 export function resolveRealHomeDir() {
+  if (IS_WIN) {
+    const winHome =
+      process.env.USERPROFILE ||
+      (process.env.HOMEDRIVE && process.env.HOMEPATH
+        ? path.join(process.env.HOMEDRIVE, process.env.HOMEPATH)
+        : null) ||
+      process.env.HOME ||
+      os.homedir();
+    if (winHome && fsSync.existsSync(winHome)) {
+      return winHome;
+    }
+    return os.homedir();
+  }
+
   const username = process.env.USER || process.env.LOGNAME || 'zhangjinhui';
   const macUserHome = `/Users/${username}`;
   try {
@@ -39,6 +76,41 @@ export function resolveCodexHomeDir() {
 
 export function buildAugmentedPath() {
   const realHome = resolveRealHomeDir();
+  const delim = path.delimiter;
+
+  if (IS_WIN) {
+    const appData = process.env.APPDATA || path.join(realHome, 'AppData', 'Roaming');
+    const localAppData = process.env.LOCALAPPDATA || path.join(realHome, 'AppData', 'Local');
+    const progFiles = process.env.ProgramFiles || 'C:\\Program Files';
+    const progFilesX86 = process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)';
+
+    const winExtraDirs = [
+      path.join(appData, 'npm'),
+      path.join(localAppData, 'npm'),
+      path.join(progFiles, 'nodejs'),
+      path.join(progFilesX86, 'nodejs'),
+      path.join(localAppData, 'Programs', 'nodejs'),
+      path.join(realHome, '.volta', 'bin'),
+      path.join(realHome, '.bun', 'bin'),
+      path.join(realHome, '.cargo', 'bin'),
+      path.join(realHome, 'scoop', 'shims'),
+      path.join(localAppData, 'Microsoft', 'WinGet', 'Links'),
+      path.join(progFiles, 'Git', 'cmd'),
+      path.join(progFiles, 'Git', 'bin'),
+      path.join(localAppData, 'Programs', 'cursor', 'resources', 'app', 'bin'),
+      path.join(localAppData, 'Programs', 'Microsoft VS Code', 'bin'),
+    ];
+
+    if (process.env.NVM_SYMLINK) {
+      winExtraDirs.unshift(process.env.NVM_SYMLINK);
+    }
+
+    const currentPath = process.env.PATH || process.env.Path || '';
+    return Array.from(new Set([...winExtraDirs, ...currentPath.split(delim).filter(Boolean)])).join(
+      delim
+    );
+  }
+
   const extraDirs = [
     '/opt/homebrew/bin',
     '/opt/homebrew/sbin',
@@ -83,7 +155,9 @@ export function buildAugmentedPath() {
   }
 
   const currentPath = process.env.PATH || '/usr/bin:/bin:/usr/sbin:/sbin';
-  return Array.from(new Set([...extraDirs, ...currentPath.split(':')])).join(':');
+  return Array.from(new Set([...extraDirs, ...currentPath.split(delim).filter(Boolean)])).join(
+    delim
+  );
 }
 
 let cachedCodexBinary = null;
@@ -93,24 +167,55 @@ export async function resolveCodexBinary(forceRefresh = false) {
 
   const augPath = buildAugmentedPath();
   const realHome = resolveRealHomeDir();
+  const delim = path.delimiter;
 
-  const candidates = augPath
-    .split(':')
-    .filter(Boolean)
-    .map((dir) => path.join(dir, 'codex'));
+  const binaryNames = IS_WIN ? ['codex.cmd', 'codex.exe', 'codex.bat', 'codex'] : ['codex'];
+  const dirs = augPath.split(delim).filter(Boolean);
 
-  for (const candidate of candidates) {
-    try {
-      if (fsSync.existsSync(candidate)) {
-        const stat = fsSync.statSync(candidate);
-        if (stat.isFile()) {
-          cachedCodexBinary = candidate;
-          return candidate;
+  for (const dir of dirs) {
+    for (const binName of binaryNames) {
+      const candidate = path.join(dir, binName);
+      try {
+        if (fsSync.existsSync(candidate)) {
+          const stat = fsSync.statSync(candidate);
+          if (stat.isFile()) {
+            cachedCodexBinary = candidate;
+            return candidate;
+          }
         }
+      } catch {
+        // ignore
       }
-    } catch {
-      // ignore
     }
+  }
+
+  if (IS_WIN) {
+    for (const winCmd of [
+      'where.exe codex',
+      'powershell.exe -NoProfile -Command "(Get-Command codex -ErrorAction SilentlyContinue).Source"',
+    ]) {
+      try {
+        const { stdout } = await execAsync(winCmd, {
+          timeout: 4000,
+          env: { ...process.env, USERPROFILE: realHome, PATH: augPath },
+        });
+        const lines = stdout
+          .trim()
+          .split(/\r?\n/)
+          .map((l) => l.trim())
+          .filter(Boolean);
+        const preferred =
+          lines.find((l) => /\.(cmd|exe|bat)$/i.test(l) && fsSync.existsSync(l)) ||
+          lines.find((l) => fsSync.existsSync(l));
+        if (preferred) {
+          cachedCodexBinary = preferred;
+          return preferred;
+        }
+      } catch {
+        // ignore
+      }
+    }
+    return null;
   }
 
   for (const shellCmd of ['/bin/zsh -lc "which codex"', '/bin/zsh -ilc "which codex"']) {
@@ -162,6 +267,7 @@ export function parseTomlConfig(rawToml) {
     model: null,
     model_provider: null,
     model_reasoning_effort: null,
+    model_reasoning_summary: null,
     personality: null,
     approval_policy: null,
     sandbox_mode: null,
@@ -248,6 +354,72 @@ export function parseTomlConfig(rawToml) {
   return result;
 }
 
+/**
+ * Update or insert top-level keys in ~/.codex/config.toml without clobbering sections
+ */
+export async function updateGlobalCodexConfigKeys(updates = {}) {
+  const codexHome = resolveCodexHomeDir();
+  const configPath = path.join(codexHome, 'config.toml');
+  let raw = '';
+  try {
+    raw = await fs.readFile(configPath, 'utf8');
+  } catch {
+    raw = '';
+  }
+
+  const lines = raw ? raw.split(/\r?\n/) : [];
+  const firstSectionIdx = lines.findIndex((l) => /^\s*\[[^\]]+\]/.test(l));
+  const topLines = firstSectionIdx >= 0 ? lines.slice(0, firstSectionIdx) : [...lines];
+  const restLines = firstSectionIdx >= 0 ? lines.slice(firstSectionIdx) : [];
+
+  for (const [key, val] of Object.entries(updates)) {
+    if (val === undefined || val === null || val === '') continue;
+    const formatted = typeof val === 'string' ? `"${val}"` : String(val);
+    const keyRegex = new RegExp(`^\\s*${key}\\s*=`);
+    const existingIdx = topLines.findIndex((l) => keyRegex.test(l));
+    if (existingIdx >= 0) {
+      topLines[existingIdx] = `${key} = ${formatted}`;
+    } else {
+      topLines.unshift(`${key} = ${formatted}`);
+    }
+  }
+
+  const updatedRaw = [...topLines, ...restLines].join('\n').replace(/\n{3,}/g, '\n\n');
+  await fs.mkdir(codexHome, { recursive: true });
+  await fs.writeFile(configPath, updatedRaw, 'utf8');
+  return updatedRaw;
+}
+
+async function discoverCachedModels(codexHome) {
+  const discovered = [];
+  const cacheCandidates = [
+    path.join(codexHome, 'models_cache.json'),
+    path.join(codexHome, 'models.json'),
+  ];
+  for (const candidate of cacheCandidates) {
+    try {
+      const raw = await fs.readFile(candidate, 'utf8');
+      const parsed = JSON.parse(raw);
+      const list = Array.isArray(parsed)
+        ? parsed
+        : Array.isArray(parsed.models)
+        ? parsed.models
+        : Array.isArray(parsed.data)
+        ? parsed.data
+        : [];
+      for (const item of list) {
+        const id = typeof item === 'string' ? item : item?.slug || item?.id || item?.model;
+        if (id && typeof id === 'string' && !LEGACY_MOCK_MODELS.has(id)) {
+          discovered.push(id);
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return discovered;
+}
+
 export async function inspectLocalCodexEnvironment(workspaceRoot) {
   const realHome = resolveRealHomeDir();
   const codexHome = resolveCodexHomeDir();
@@ -261,8 +433,8 @@ export async function inspectLocalCodexEnvironment(workspaceRoot) {
   if (codexBin) {
     try {
       const { stdout } = await execAsync(`"${codexBin}" --version`, {
-        timeout: 3000,
-        env: { ...process.env, HOME: realHome, PATH: augPath },
+        timeout: 3500,
+        env: { ...process.env, HOME: realHome, USERPROFILE: realHome, PATH: augPath },
       });
       cliVersion = stdout.trim();
     } catch {
@@ -271,8 +443,8 @@ export async function inspectLocalCodexEnvironment(workspaceRoot) {
 
     try {
       const { stdout, stderr } = await execAsync(`"${codexBin}" login status`, {
-        timeout: 3500,
-        env: { ...process.env, HOME: realHome, PATH: augPath },
+        timeout: 4000,
+        env: { ...process.env, HOME: realHome, USERPROFILE: realHome, PATH: augPath },
       });
       cliLoginStatusText = (stdout || stderr || '').trim();
       cliLoggedIn =
@@ -335,6 +507,7 @@ export async function inspectLocalCodexEnvironment(workspaceRoot) {
         idPayload?.name ||
         idPayload?.nickname ||
         parsedAuth.name ||
+        process.env.USERNAME ||
         process.env.USER ||
         'zhangjinhui',
       planType:
@@ -381,24 +554,24 @@ export async function inspectLocalCodexEnvironment(workspaceRoot) {
   const globalParsed = parseTomlConfig(globalConfigRaw);
   const projectParsed = parseTomlConfig(projectConfigRaw);
 
+  const cleanModel = (m) => (m && !LEGACY_MOCK_MODELS.has(m) ? m : null);
+
   const effectiveModel =
-    globalParsed.model || projectParsed.model || 'gpt-5.4';
+    cleanModel(globalParsed.model) || cleanModel(projectParsed.model) || 'gpt-5.4';
   const effectiveProvider =
     globalParsed.model_provider || projectParsed.model_provider || 'openai';
-  const effectiveEffort =
+  const rawEffort =
     globalParsed.model_reasoning_effort ||
     projectParsed.model_reasoning_effort ||
-    projectParsed.reasoning_effort ||
     'high';
+  const effectiveEffort = VALID_REASONING_EFFORTS.has(rawEffort) ? rawEffort : 'high';
   const effectiveApproval =
     globalParsed.approval_policy ||
     projectParsed.approval_policy ||
-    projectParsed.sandbox?.approval_policy ||
     'on-request';
   const effectiveSandbox =
     globalParsed.sandbox_mode ||
     projectParsed.sandbox_mode ||
-    projectParsed.sandbox?.mode ||
     'workspace-write';
   const effectivePersonality =
     globalParsed.personality || projectParsed.personality || 'pragmatic';
@@ -413,6 +586,29 @@ export async function inspectLocalCodexEnvironment(workspaceRoot) {
 
   const localSessions = await scanLocalCodexSessions(codexHome);
   const localSkills = await scanLocalCodexSkills(codexHome, workspaceRoot);
+  const cachedModels = await discoverCachedModels(codexHome);
+
+  // Extract any models referenced in profiles or local sessions
+  const profileModels = Object.values({
+    ...projectParsed.profiles,
+    ...globalParsed.profiles,
+  })
+    .map((p) => cleanModel(p?.model))
+    .filter(Boolean);
+
+  const sessionModels = localSessions
+    .map((s) => cleanModel(s.model))
+    .filter(Boolean);
+
+  const availableModels = Array.from(
+    new Set([
+      effectiveModel,
+      ...profileModels,
+      ...cachedModels,
+      ...sessionModels,
+      ...OFFICIAL_CODEX_MODELS,
+    ].filter(Boolean))
+  );
 
   return {
     codexHome,
@@ -443,6 +639,7 @@ export async function inspectLocalCodexEnvironment(workspaceRoot) {
         approvalPolicy: effectiveApproval,
         sandboxMode: effectiveSandbox,
         personality: effectivePersonality,
+        availableModels,
         modelProviders: {
           ...projectParsed.model_providers,
           ...globalParsed.model_providers,
@@ -460,9 +657,6 @@ export async function inspectLocalCodexEnvironment(workspaceRoot) {
   };
 }
 
-/**
- * Scan ~/.codex/sessions (.jsonl rollout files) and ~/.codex/history.jsonl to import real local sessions
- */
 async function scanLocalCodexSessions(codexHome) {
   const sessions = [];
   const sessionsDir = path.join(codexHome, 'sessions');
@@ -579,7 +773,7 @@ async function scanLocalCodexSessions(codexHome) {
         cwd: cwd || resolveRealHomeDir(),
         projectName: cwd ? path.basename(cwd) : 'codex-local',
         branch,
-        model: model || 'gpt-5.4',
+        model: model && !LEGACY_MOCK_MODELS.has(model) ? model : null,
         updatedAt: new Date(fileInfo.mtimeMs).toLocaleTimeString([], {
           hour: '2-digit',
           minute: '2-digit',
@@ -781,7 +975,7 @@ export async function inspectGitRepository(cwd) {
   const worktrees = [];
   try {
     const { stdout } = await execAsync('git worktree list --porcelain', execOpts);
-    const blocks = stdout.trim().split(/\n\n+/);
+    const blocks = stdout.trim().split(/\r?\n\r?\n+/);
     blocks.forEach((blk, idx) => {
       const lines = blk.split(/\r?\n/);
       let wtPath = '';
@@ -833,7 +1027,108 @@ export async function inspectGitRepository(cwd) {
 }
 
 /**
- * Stream a real turn via local `codex exec --json` with Goal mode (/goal) support
+ * Helper to execute a single `codex exec` attempt with stdin prompt piping
+ */
+async function runCodexCliProcess({
+  codexBin,
+  args,
+  promptText,
+  targetCwd,
+  realHome,
+  augPath,
+  turnKey,
+  onJsonEvent,
+  onStderrLine,
+}) {
+  const needsShellOnWin = IS_WIN && /\.(cmd|bat|ps1)$/i.test(codexBin);
+
+  const child = spawn(codexBin, args, {
+    cwd: targetCwd,
+    shell: needsShellOnWin,
+    windowsHide: true,
+    env: {
+      ...process.env,
+      HOME: realHome,
+      USERPROFILE: realHome,
+      PATH: augPath,
+      NO_COLOR: '1',
+    },
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+
+  activeTurnProcesses.set(turnKey, child);
+
+  // Pipe prompt via stdin and close stdin
+  try {
+    child.stdin.write(promptText, 'utf8');
+    child.stdin.end();
+  } catch {
+    // ignore stdin write error
+  }
+
+  let receivedAgentMessage = false;
+  let receivedTurnFailed = null;
+  let stderrBuffer = '';
+
+  const rl = readline.createInterface({ input: child.stdout });
+  rl.on('line', (line) => {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (
+        (parsed.type === 'item.completed' || parsed.type === 'item.updated') &&
+        parsed.item?.type === 'agent_message' &&
+        parsed.item?.text
+      ) {
+        receivedAgentMessage = true;
+      }
+      if (parsed.type === 'turn.failed' && parsed.error?.message) {
+        receivedTurnFailed = parsed.error.message;
+      }
+      onJsonEvent(parsed);
+    } catch {
+      const cleanLine = stripAnsi(trimmed);
+      if (cleanLine) {
+        onJsonEvent({
+          type: 'stdout.line',
+          text: cleanLine,
+        });
+      }
+    }
+  });
+
+  child.stderr.on('data', (chunk) => {
+    const cleanText = stripAnsi(chunk.toString());
+    stderrBuffer += cleanText;
+    onStderrLine(cleanText);
+  });
+
+  const exitCode = await new Promise((resolve) => {
+    child.on('close', (code) => {
+      activeTurnProcesses.delete(turnKey);
+      resolve(code ?? 0);
+    });
+    child.on('error', (err) => {
+      activeTurnProcesses.delete(turnKey);
+      stderrBuffer += `\n${String(err.message || err)}`;
+      resolve(1);
+    });
+  });
+
+  return {
+    exitCode,
+    receivedAgentMessage,
+    receivedTurnFailed,
+    stderrBuffer: stderrBuffer.trim(),
+  };
+}
+
+/**
+ * Stream a real turn via local `codex exec --json -` with Goal mode (/goal),
+ * 5-level Reasoning Effort (`minimal` | `low` | `medium` | `high` | `xhigh`),
+ * detailed Thinking summaries (`model_reasoning_summary="detailed"`),
+ * and automatic multi-stage fallback retry when CLI flags or model overrides conflict.
  */
 export async function streamLocalCodexTurn(reqBody, res) {
   const {
@@ -869,9 +1164,17 @@ export async function streamLocalCodexTurn(reqBody, res) {
   const realHome = resolveRealHomeDir();
   const augPath = buildAugmentedPath();
   const codexBin = await resolveCodexBinary();
-  const targetCwd = cwd && fsSync.existsSync(cwd) ? cwd : process.cwd();
+
+  // Resolve a valid target working directory (never inside read-only /Applications bundle)
+  let targetCwd = cwd && fsSync.existsSync(cwd) ? cwd : process.cwd();
+  if (targetCwd.includes('.app/Contents/Resources')) {
+    const defaultRepo = path.join(realHome, 'Desktop', 'codex-test');
+    targetCwd = fsSync.existsSync(defaultRepo) ? defaultRepo : realHome;
+  }
+
   const envStatus = await inspectLocalCodexEnvironment(targetCwd);
-  const configDefaultModel = envStatus.config?.effective?.model;
+  const configDefaultModel = envStatus.config?.effective?.model || 'gpt-5.4';
+  const configDefaultEffort = envStatus.config?.effective?.reasoningEffort || 'high';
 
   let composedPrompt = prompt || '';
   if (mode === 'goal' || activeGoal) {
@@ -895,104 +1198,145 @@ export async function streamLocalCodexTurn(reqBody, res) {
         ? 'danger-full-access'
         : 'workspace-write';
 
-    // Map reasoning effort safely (`low` | `medium` | `high`)
-    const cliEffort =
-      reasoningEffort === 'low' || reasoningEffort === 'medium'
+    // Map reasoning effort accurately across all 5 official levels (`minimal` | `low` | `medium` | `high` | `xhigh`)
+    const normalizedEffort =
+      reasoningEffort === 'max'
+        ? 'xhigh'
+        : VALID_REASONING_EFFORTS.has(reasoningEffort)
         ? reasoningEffort
-        : 'high';
+        : configDefaultEffort;
 
-    const args = ['exec'];
-    if (cliSessionId) {
-      args.push('resume', cliSessionId);
-    }
-    args.push('--json', '--skip-git-repo-check');
+    // Resolve requested model: ignore legacy fake model names (`gpt-6.1-sol`, `gpt-6-luna`)
+    const requestedModel =
+      model && model !== 'default' && !LEGACY_MOCK_MODELS.has(model)
+        ? model
+        : configDefaultModel;
 
-    if (!cliSessionId) {
-      args.push('-C', targetCwd);
-      args.push('-s', cliSandbox);
-    }
+    const buildExecArgs = ({ useResume, passModelOverride, passConfigOverrides }) => {
+      if (useResume && cliSessionId) {
+        // `codex exec resume <SESSION_ID> --json -` (reads prompt from stdin)
+        const resumeArgs = ['exec', 'resume', cliSessionId, '--json'];
+        if (passModelOverride && requestedModel && requestedModel !== configDefaultModel) {
+          resumeArgs.push('-m', requestedModel);
+        }
+        if (passConfigOverrides) {
+          resumeArgs.push('-c', `model_reasoning_effort="${normalizedEffort}"`);
+          resumeArgs.push('-c', 'model_reasoning_summary="detailed"');
+        }
+        resumeArgs.push('-');
+        return resumeArgs;
+      }
 
-    // Only pass -m if user explicitly chose a model different from their ~/.codex/config.toml default
-    if (model && model !== 'default' && model !== configDefaultModel) {
-      args.push('-m', model);
-    }
-    args.push('-c', `model_reasoning_effort="${cliEffort}"`);
-    args.push(composedPrompt);
+      const freshArgs = ['exec', '--json', '--skip-git-repo-check', '-C', targetCwd, '-s', cliSandbox];
+      if (passModelOverride && requestedModel && requestedModel !== configDefaultModel) {
+        freshArgs.push('-m', requestedModel);
+      }
+      if (passConfigOverrides) {
+        freshArgs.push('-c', `model_reasoning_effort="${normalizedEffort}"`);
+        freshArgs.push('-c', 'model_reasoning_summary="detailed"');
+      }
+      freshArgs.push('-');
+      return freshArgs;
+    };
+
+    const primaryArgs = buildExecArgs({
+      useResume: Boolean(cliSessionId),
+      passModelOverride: true,
+      passConfigOverrides: true,
+    });
 
     emitEvent({
       type: 'bridge.info',
-      message: `本机 Codex CLI 执行: ${path.basename(codexBin)} ${args.slice(0, -1).join(' ')}`,
+      message: `正在调用本机 Codex (${requestedModel} · 推理强度: ${normalizedEffort})`,
       binaryPath: codexBin,
+      model: requestedModel,
+      reasoningEffort: normalizedEffort,
       cwd: targetCwd,
     });
 
-    const child = spawn(codexBin, args, {
-      cwd: targetCwd,
-      env: {
-        ...process.env,
-        HOME: realHome,
-        PATH: augPath,
-      },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
+    const forwardJsonEvent = (parsed) => {
+      // Do not forward terminal `turn.failed` during primary attempt if we might fallback-retry
+      if (parsed.type === 'turn.failed') return;
+      emitEvent(parsed);
+    };
 
-    activeTurnProcesses.set(turnId || threadId, child);
-
-    let receivedAgentMessage = false;
-    let stderrBuffer = '';
-
-    const rl = readline.createInterface({ input: child.stdout });
-    rl.on('line', (line) => {
-      const trimmed = line.trim();
-      if (!trimmed) return;
-      try {
-        const parsed = JSON.parse(trimmed);
-        if (
-          parsed.type === 'item.completed' &&
-          parsed.item?.type === 'agent_message'
-        ) {
-          receivedAgentMessage = true;
-        }
-        emitEvent(parsed);
-      } catch {
+    const forwardStderrProgress = (text) => {
+      // Only forward meaningful progress lines (skip noisy rust/clap tracebacks)
+      const lines = text
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .filter(
+          (l) =>
+            l.length > 0 &&
+            !l.startsWith('warning:') &&
+            !l.startsWith('error: unexpected argument') &&
+            !l.includes('RUST_BACKTRACE')
+        );
+      if (lines.length > 0) {
         emitEvent({
-          type: 'stdout.line',
-          text: trimmed,
+          type: 'stderr.delta',
+          text: lines[lines.length - 1],
         });
       }
+    };
+
+    const turnKey = turnId || threadId;
+
+    // Stage 1: Primary execution
+    let result = await runCodexCliProcess({
+      codexBin,
+      args: primaryArgs,
+      promptText: composedPrompt,
+      targetCwd,
+      realHome,
+      augPath,
+      turnKey,
+      onJsonEvent: forwardJsonEvent,
+      onStderrLine: forwardStderrProgress,
     });
 
-    child.stderr.on('data', (chunk) => {
-      const text = chunk.toString();
-      stderrBuffer += text;
+    // Stage 2: Automatic Fallback Retry if Stage 1 failed without producing an agent answer
+    // (e.g., stale `resume` session ID, unsupported `-m` model override on custom provider, or unsupported `xhigh` effort)
+    if (
+      (result.exitCode !== 0 || result.receivedTurnFailed) &&
+      !result.receivedAgentMessage
+    ) {
+      const fallbackArgs = buildExecArgs({
+        useResume: false,
+        passModelOverride: false,
+        passConfigOverrides: false,
+      });
+
       emitEvent({
         type: 'stderr.delta',
-        text,
+        text: `正在使用本机默认配置 (${configDefaultModel}) 自动重试...`,
       });
-    });
 
-    await new Promise((resolve) => {
-      child.on('close', (code) => {
-        activeTurnProcesses.delete(turnId || threadId);
-        resolve(code);
+      result = await runCodexCliProcess({
+        codexBin,
+        args: fallbackArgs,
+        promptText: composedPrompt,
+        targetCwd,
+        realHome,
+        augPath,
+        turnKey,
+        onJsonEvent: forwardJsonEvent,
+        onStderrLine: forwardStderrProgress,
       });
-      child.on('error', (err) => {
-        activeTurnProcesses.delete(turnId || threadId);
-        emitEvent({
-          type: 'turn.failed',
-          error: { message: String(err.message || err) },
-        });
-        resolve(1);
-      });
-    });
+    }
 
-    if (!receivedAgentMessage && stderrBuffer.trim()) {
+    if (!result.receivedAgentMessage) {
+      const errDetail =
+        result.receivedTurnFailed ||
+        result.stderrBuffer ||
+        '本机 Codex CLI 未返回文本响应，请检查网络或登录状态 (`codex login status`)。';
+
       emitEvent({
         type: 'item.completed',
         item: {
           id: `item_diag_${Date.now()}`,
           type: 'agent_message',
-          text: `**本机 Codex CLI 执行输出 (${path.basename(codexBin)}):**\n\`\`\`\n${stderrBuffer.trim().slice(-2000)}\n\`\`\``,
+          text: `**本机 Codex CLI 执行提示 (${requestedModel}):**\n\`\`\`\n${errDetail.slice(-2000)}\n\`\`\``,
         },
       });
     }
@@ -1017,7 +1361,7 @@ export async function streamLocalCodexTurn(reqBody, res) {
     item: {
       id: `item_reason_${Date.now()}`,
       type: 'reasoning',
-      text: `已检查本机配置目录 ${resolveCodexHomeDir()} 与工作区 ${targetCwd} (分支: ${gitState.branch})。`,
+      text: `**检查本机配置与工作区环境**\n已读取配置目录 \`${resolveCodexHomeDir()}\` 与工作区 \`${targetCwd}\` (分支: \`${gitState.branch}\`)。`,
     },
   });
 
@@ -1038,7 +1382,7 @@ export async function streamLocalCodexTurn(reqBody, res) {
     item: {
       id: `item_msg_${Date.now()}`,
       type: 'agent_message',
-      text: `已检查本地工作区（\`${targetCwd}\`，分支 \`${gitState.branch}\`）。当前未在标准路径检测到 \`codex\` CLI 可执行文件，请确认已在终端安装并登录 \`codex\`。`,
+      text: `已检查本地工作区（\`${targetCwd}\`，分支 \`${gitState.branch}\`）。当前未在标准路径检测到 \`codex\` CLI 可执行文件，请确认已在终端安装（\`npm install -g @openai/codex\`）并登录 \`codex\`。`,
     },
   });
 
@@ -1055,7 +1399,11 @@ export function interruptLocalCodexTurn(turnIdOrThreadId) {
   const proc = activeTurnProcesses.get(turnIdOrThreadId);
   if (proc) {
     try {
-      proc.kill('SIGINT');
+      if (IS_WIN && proc.pid) {
+        exec(`taskkill /pid ${proc.pid} /T /F`);
+      } else {
+        proc.kill('SIGINT');
+      }
     } catch {
       // ignore
     }
@@ -1068,23 +1416,60 @@ export function interruptLocalCodexTurn(turnIdOrThreadId) {
 export async function openInMacApp(targetPath, appId = 'cursor') {
   const augPath = buildAugmentedPath();
   const safeTarget = targetPath || process.cwd();
+  const normalizedId = String(appId || 'cursor').toLowerCase();
 
   const appMap = {
     cursor: { appName: 'Cursor', cli: 'cursor' },
     vscode: { appName: 'Visual Studio Code', cli: 'code' },
     windsurf: { appName: 'Windsurf', cli: 'windsurf' },
     zed: { appName: 'Zed', cli: 'zed' },
-    ghostty: { appName: 'Ghostty', cli: null },
+    ghostty: { appName: 'Ghostty', cli: 'ghostty' },
     iterm: { appName: 'iTerm', cli: null },
     warp: { appName: 'Warp', cli: null },
-    terminal: { appName: 'Terminal', cli: null },
-    finder: { appName: 'Finder', cli: null },
+    terminal: { appName: IS_WIN ? 'Windows Terminal' : 'Terminal', cli: IS_WIN ? 'wt.exe' : null },
+    finder: { appName: IS_WIN ? 'Explorer' : 'Finder', cli: null },
   };
 
-  const entry = appMap[appId.toLowerCase()] || { appName: appId, cli: null };
+  const entry = appMap[normalizedId] || { appName: appId, cli: normalizedId };
 
   try {
-    if (appId === 'finder') {
+    if (IS_WIN) {
+      if (normalizedId === 'finder' || normalizedId === 'explorer') {
+        await execAsync(`explorer.exe "${safeTarget}"`, {
+          env: { ...process.env, PATH: augPath },
+        });
+        return { ok: true, openedWith: 'Windows Explorer' };
+      }
+      if (normalizedId === 'terminal' || normalizedId === 'iterm' || normalizedId === 'ghostty') {
+        try {
+          await execAsync(`wt.exe -d "${safeTarget}"`, {
+            env: { ...process.env, PATH: augPath },
+          });
+          return { ok: true, openedWith: 'Windows Terminal' };
+        } catch {
+          await execAsync(
+            `cmd.exe /c start "" powershell.exe -NoExit -Command "Set-Location '${safeTarget}'"`,
+            {
+              env: { ...process.env, PATH: augPath },
+            }
+          );
+          return { ok: true, openedWith: 'PowerShell' };
+        }
+      }
+      if (entry.cli) {
+        await execAsync(`cmd.exe /c ${entry.cli} "${safeTarget}"`, {
+          env: { ...process.env, PATH: augPath },
+          timeout: 4000,
+        });
+        return { ok: true, openedWith: entry.appName };
+      }
+      await execAsync(`explorer.exe "${safeTarget}"`, {
+        env: { ...process.env, PATH: augPath },
+      });
+      return { ok: true, openedWith: entry.appName };
+    }
+
+    if (normalizedId === 'finder') {
       await execAsync(`open "${safeTarget}"`, { env: { ...process.env, PATH: augPath } });
       return { ok: true, openedWith: 'Finder' };
     }

@@ -1,16 +1,34 @@
 const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
-const { spawn } = require('child_process');
+const http = require('http');
+const { spawn, exec } = require('child_process');
+
+const IS_MAC = process.platform === 'darwin';
+const IS_WIN = process.platform === 'win32';
+const SERVER_PORT = Number(process.env.PORT || 4500);
 
 let mainWindow = null;
 let appServerProc = null;
 let codexCliProc = null;
 
+function resolveAppRoot() {
+  return path.resolve(__dirname, '..');
+}
+
 function startEmbeddedAppServer() {
-  const serverScript = path.join(__dirname, '..', 'server', 'app-server.mjs');
+  const appRoot = resolveAppRoot();
+  const serverScript = path.join(appRoot, 'server', 'app-server.mjs');
+  const distDir = path.join(appRoot, 'dist');
+
   appServerProc = spawn(process.execPath, [serverScript], {
-    cwd: path.join(__dirname, '..'),
-    env: { ...process.env, PORT: '4500', ELECTRON_RUN_AS_NODE: '1' },
+    cwd: process.env.CODEX_WORKSPACE_ROOT || process.cwd(),
+    windowsHide: true,
+    env: {
+      ...process.env,
+      PORT: String(SERVER_PORT),
+      CODEX_STATIC_DIR: distDir,
+      ELECTRON_RUN_AS_NODE: '1',
+    },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
@@ -22,15 +40,62 @@ function startEmbeddedAppServer() {
   });
 }
 
-function createWindow() {
+function waitForServerReady(timeoutMs = 5000) {
+  const started = Date.now();
+  return new Promise((resolve) => {
+    const check = () => {
+      const req = http.get(`http://127.0.0.1:${SERVER_PORT}/readyz`, (res) => {
+        if (res.statusCode === 200) {
+          resolve(true);
+        } else if (Date.now() - started < timeoutMs) {
+          setTimeout(check, 120);
+        } else {
+          resolve(false);
+        }
+      });
+      req.on('error', () => {
+        if (Date.now() - started < timeoutMs) {
+          setTimeout(check, 120);
+        } else {
+          resolve(false);
+        }
+      });
+      req.end();
+    };
+    check();
+  });
+}
+
+function stopChildProcess(proc) {
+  if (!proc) return;
+  try {
+    if (IS_WIN && proc.pid) {
+      exec(`taskkill /pid ${proc.pid} /T /F`);
+    } else {
+      proc.kill('SIGTERM');
+    }
+  } catch {
+    // ignore
+  }
+}
+
+async function createWindow() {
+  const appRoot = resolveAppRoot();
+  const iconPath = IS_WIN
+    ? path.join(appRoot, 'build', 'icon.ico')
+    : path.join(appRoot, 'build', 'icon.png');
+
   mainWindow = new BrowserWindow({
     width: 1520,
     height: 940,
-    minWidth: 1120,
-    minHeight: 720,
-    backgroundColor: '#090A0F',
-    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
-    trafficLightPosition: { x: 16, y: 14 },
+    minWidth: 1080,
+    minHeight: 700,
+    title: 'OpenAI Codex Desktop',
+    backgroundColor: '#F5F5F5',
+    icon: iconPath,
+    autoHideMenuBar: true,
+    titleBarStyle: IS_MAC ? 'hiddenInset' : 'default',
+    trafficLightPosition: IS_MAC ? { x: 16, y: 14 } : undefined,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -38,36 +103,41 @@ function createWindow() {
     },
   });
 
+  await waitForServerReady(4000);
+
   const startUrl =
     process.env.ELECTRON_START_URL ||
-    `file://${path.join(__dirname, '..', 'dist', 'index.html')}`;
+    `http://127.0.0.1:${SERVER_PORT}`;
 
-  mainWindow.loadURL(startUrl);
+  mainWindow.loadURL(startUrl).catch(() => {
+    mainWindow.loadFile(path.join(appRoot, 'dist', 'index.html'));
+  });
 
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   startEmbeddedAppServer();
-  createWindow();
+  await createWindow();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
 });
 
+app.on('before-quit', () => {
+  stopChildProcess(appServerProc);
+  stopChildProcess(codexCliProc);
+});
+
 app.on('window-all-closed', () => {
-  if (appServerProc) {
-    appServerProc.kill();
-    appServerProc = null;
-  }
-  if (codexCliProc) {
-    codexCliProc.kill();
-    codexCliProc = null;
-  }
-  if (process.platform !== 'darwin') {
+  stopChildProcess(appServerProc);
+  appServerProc = null;
+  stopChildProcess(codexCliProc);
+  codexCliProc = null;
+  if (!IS_MAC) {
     app.quit();
   }
 });
@@ -83,7 +153,12 @@ ipcMain.handle('codex:pick-directory', async () => {
 
 ipcMain.handle('codex:open-in-editor', async (_event, { targetPath, editor = 'code' }) => {
   try {
-    spawn(editor, [targetPath], { detached: true, stdio: 'ignore' }).unref();
+    spawn(editor, [targetPath], {
+      detached: true,
+      shell: IS_WIN,
+      windowsHide: true,
+      stdio: 'ignore',
+    }).unref();
     return { ok: true };
   } catch (err) {
     await shell.openPath(targetPath);
@@ -96,7 +171,11 @@ ipcMain.handle('codex:spawn-stdio-server', async (_event, { command = 'codex', a
     return { status: 'already_running', pid: codexCliProc.pid };
   }
   try {
-    codexCliProc = spawn(command, args, { stdio: ['pipe', 'pipe', 'pipe'] });
+    codexCliProc = spawn(command, args, {
+      shell: IS_WIN,
+      windowsHide: true,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
     codexCliProc.stdout.on('data', (data) => {
       if (mainWindow) {
         mainWindow.webContents.send('codex:stdio-message', data.toString());

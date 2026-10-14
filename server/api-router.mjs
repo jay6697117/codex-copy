@@ -1,8 +1,9 @@
 /**
  * Unified HTTP API Router for OpenAI Codex Desktop App
- * Mounted by both `vite.config.ts` (dev middleware) and `server/app-server.mjs` (port 4500 / Electron).
+ * Mounted by both `vite.config.ts` (dev middleware) and `server/app-server.mjs` (port 4500 / Electron / Native macOS & Windows app).
  */
 import fs from 'node:fs/promises';
+import fsSync from 'node:fs';
 import path from 'node:path';
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -15,9 +16,21 @@ import {
   resolveCodexHomeDir,
   resolveRealHomeDir,
   streamLocalCodexTurn,
+  updateGlobalCodexConfigKeys,
 } from './codex-local-bridge.mjs';
 
 const execAsync = promisify(exec);
+
+function resolveEffectiveWorkspace(workspaceRoot) {
+  const candidate = workspaceRoot || process.cwd();
+  if (candidate.includes('.app/Contents/Resources')) {
+    const realHome = resolveRealHomeDir();
+    const fallbackRepo = path.join(realHome, 'Desktop', 'codex-test');
+    if (fsSync.existsSync(fallbackRepo)) return fallbackRepo;
+    return realHome;
+  }
+  return candidate;
+}
 
 const rpcServerState = {
   initialized: false,
@@ -28,7 +41,7 @@ const rpcServerState = {
 
 export async function listWorkspaceFiles(dirPath, baseDir = dirPath, depth = 0) {
   if (depth > 4) return [];
-  const ignored = new Set(['node_modules', '.git', 'dist', '.DS_Store']);
+  const ignored = new Set(['node_modules', '.git', 'dist', 'release', 'build', '.DS_Store']);
   let entries = [];
   try {
     entries = await fs.readdir(dirPath, { withFileTypes: true });
@@ -70,7 +83,8 @@ export async function listWorkspaceFiles(dirPath, baseDir = dirPath, depth = 0) 
   });
 }
 
-export async function handleJsonRpcMessage(msg, workspaceRoot = process.cwd()) {
+export async function handleJsonRpcMessage(msg, rawWorkspaceRoot = process.cwd()) {
+  const workspaceRoot = resolveEffectiveWorkspace(rawWorkspaceRoot);
   const { id, method, params = {} } = msg;
 
   if (method === 'initialize') {
@@ -107,55 +121,21 @@ export async function handleJsonRpcMessage(msg, workspaceRoot = process.cwd()) {
   if (method === 'model/list') {
     const envInfo = await inspectLocalCodexEnvironment(workspaceRoot);
     const configuredModel = envInfo.config.effective.model;
-    const baseModels = [
-      {
-        id: 'gpt-5.4',
-        title: 'GPT-5.4',
-        tier: 'frontier',
-        description: 'Default frontier coding & reasoning model in Codex CLI',
-      },
-      {
-        id: 'gpt-5.3-codex',
-        title: 'GPT-5.3-Codex',
-        tier: 'frontier',
-        description: 'Specialized agentic software engineering model',
-      },
-      {
-        id: 'gpt-6.1-sol',
-        title: 'GPT-6.1 Sol',
-        tier: 'frontier',
-        description: 'Multi-agent architecture & deep repo refactoring',
-      },
-      {
-        id: 'gpt-6-luna',
-        title: 'GPT-6 Luna',
-        tier: 'fast',
-        description: 'Fast interactive edits & explorer subagents',
-      },
-      {
-        id: 'o3',
-        title: 'o3',
-        tier: 'reasoning',
-        description: 'Deep analytical & algorithmic problem solving',
-      },
-      {
-        id: 'o4-mini',
-        title: 'o4-mini',
-        tier: 'fast',
-        description: 'Low-latency reasoning & test generation',
-      },
-    ];
-    if (configuredModel && !baseModels.some((m) => m.id === configuredModel)) {
-      baseModels.unshift({
-        id: configuredModel,
-        title: `${configuredModel} (config.toml)`,
-        tier: 'configured',
-        description: 'Configured in local ~/.codex/config.toml',
-      });
-    }
+    const available = envInfo.config.effective.availableModels || [];
+
+    const models = available.map((mId) => ({
+      id: mId,
+      title: mId === configuredModel ? `${mId} (config.toml)` : mId,
+      tier: mId === configuredModel ? 'configured' : 'official',
+      description:
+        mId === configuredModel
+          ? 'Configured in local ~/.codex/config.toml'
+          : 'OpenAI Codex model',
+    }));
+
     return {
       id,
-      result: { models: baseModels },
+      result: { models },
     };
   }
 
@@ -248,7 +228,8 @@ function sendJson(res, status, data) {
   res.end(JSON.stringify(data));
 }
 
-export async function handleApiRequest(req, res, workspaceRoot = process.cwd()) {
+export async function handleApiRequest(req, res, rawWorkspaceRoot = process.cwd()) {
+  const workspaceRoot = resolveEffectiveWorkspace(rawWorkspaceRoot);
   const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
   const pathname = url.pathname;
 
@@ -308,7 +289,23 @@ export async function handleApiRequest(req, res, workspaceRoot = process.cwd()) 
     return true;
   }
 
-  // 3. Real Streaming Turn Execution via Local `codex exec --json`
+  // 2b. Update Model or Reasoning Effort in ~/.codex/config.toml
+  if (req.method === 'POST' && pathname === '/api/codex/preferences') {
+    try {
+      const body = await readJsonBody(req);
+      const updates = {};
+      if (body.model) updates.model = body.model;
+      if (body.reasoningEffort) updates.model_reasoning_effort = body.reasoningEffort;
+      await updateGlobalCodexConfigKeys(updates);
+      const updated = await inspectLocalCodexEnvironment(workspaceRoot);
+      sendJson(res, 200, { ok: true, status: updated });
+    } catch (err) {
+      sendJson(res, 500, { ok: false, error: String(err.message || err) });
+    }
+    return true;
+  }
+
+  // 3. Real Streaming Turn Execution via Local `codex exec --json -`
   if (req.method === 'POST' && pathname === '/api/codex/turn-stream') {
     try {
       const body = await readJsonBody(req);
@@ -525,7 +522,7 @@ export async function handleApiRequest(req, res, workspaceRoot = process.cwd()) 
       const { stdout, stderr } = await execAsync(command, {
         cwd: execCwd,
         timeout: 25000,
-        env: { ...process.env, HOME: realHome, PATH: augPath },
+        env: { ...process.env, HOME: realHome, USERPROFILE: realHome, PATH: augPath },
       });
       sendJson(res, 200, { exitCode: 0, stdout, stderr });
     } catch (err) {

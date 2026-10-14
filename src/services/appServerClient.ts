@@ -83,6 +83,22 @@ export async function saveLocalCodexConfig(
   }
 }
 
+export async function saveCodexModelPreferences(prefs: {
+  model?: string;
+  reasoningEffort?: ReasoningEffort;
+}): Promise<{ ok: boolean; status?: LocalCodexStatus; error?: string }> {
+  try {
+    const res = await fetchWithFallback('/api/codex/preferences', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(prefs),
+    });
+    return await res.json();
+  } catch (err) {
+    return { ok: false, error: String(err) };
+  }
+}
+
 export async function fetchGitStatus(cwd?: string): Promise<{
   cwd: string;
   branch: string;
@@ -319,9 +335,31 @@ export interface StreamTurnCallbacks {
   onRpcLog: (entry: JsonRpcLogEntry) => void;
 }
 
+function extractReasoningText(rawItem: any): string {
+  if (!rawItem) return '';
+  if (typeof rawItem.text === 'string' && rawItem.text.trim()) {
+    return rawItem.text.trim();
+  }
+  if (Array.isArray(rawItem.summary)) {
+    const joined = rawItem.summary
+      .map((s: any) => (typeof s === 'string' ? s : s?.text || ''))
+      .filter(Boolean)
+      .join('\n');
+    if (joined.trim()) return joined.trim();
+  }
+  if (Array.isArray(rawItem.content)) {
+    const joined = rawItem.content
+      .map((c: any) => (typeof c === 'string' ? c : c?.text || ''))
+      .filter(Boolean)
+      .join('\n');
+    if (joined.trim()) return joined.trim();
+  }
+  return '';
+}
+
 /**
  * Execute a real turn against the local machine's `codex` CLI (`POST /api/codex/turn-stream`)
- * and stream live JSONL events (`reasoning`, `command_execution`, `file_change`, `agent_message`, `git.state`).
+ * and stream live JSONL events (`reasoning`, `todo_list`, `command_execution`, `file_change`, `agent_message`, `git.state`).
  */
 export function runInteractiveAgentTurn(params: {
   threadId: string;
@@ -357,6 +395,35 @@ export function runInteractiveAgentTurn(params: {
 
   const liveReasoningId = `item_live_reason_${Date.now()}`;
   let liveReasoningAdded = false;
+
+  const ensureLiveReasoning = (initialStep: string) => {
+    if (!liveReasoningAdded) {
+      liveReasoningAdded = true;
+      params.callbacks.onItemAdded({
+        id: liveReasoningId,
+        type: 'reasoning',
+        status: 'streaming',
+        timestamp: nowTime(),
+        durationSeconds: 1,
+        reasoningSteps: [initialStep],
+      });
+    } else {
+      params.callbacks.onItemUpdated(liveReasoningId, (prev) => {
+        const steps = prev.reasoningSteps || [];
+        if (steps[steps.length - 1] === initialStep) {
+          return {
+            ...prev,
+            durationSeconds: Math.max(1, Math.round((Date.now() - startedAtMs) / 1000)),
+          };
+        }
+        return {
+          ...prev,
+          durationSeconds: Math.max(1, Math.round((Date.now() - startedAtMs) / 1000)),
+          reasoningSteps: [...steps, initialStep],
+        };
+      });
+    }
+  };
 
   (async () => {
     try {
@@ -410,17 +477,7 @@ export function runInteractiveAgentTurn(params: {
           logNotification(evt.type || 'codex/event', evt);
 
           if (evt.type === 'bridge.info') {
-            if (!liveReasoningAdded) {
-              liveReasoningAdded = true;
-              params.callbacks.onItemAdded({
-                id: liveReasoningId,
-                type: 'reasoning',
-                status: 'streaming',
-                timestamp: nowTime(),
-                durationSeconds: 1,
-                reasoningSteps: [evt.message || 'Connected to local Codex CLI'],
-              });
-            }
+            ensureLiveReasoning(evt.message || 'Connected to local Codex CLI');
             continue;
           }
 
@@ -429,14 +486,17 @@ export function runInteractiveAgentTurn(params: {
             continue;
           }
 
+          if (evt.type === 'error' && evt.message) {
+            if (/Reconnecting/i.test(evt.message)) {
+              ensureLiveReasoning(`网络波动自动重连中: ${evt.message}`);
+            }
+            continue;
+          }
+
           if (evt.type === 'stderr.delta' && evt.text) {
             const cleaned = String(evt.text).trim();
             if (cleaned && liveReasoningAdded) {
-              params.callbacks.onItemUpdated(liveReasoningId, (prev) => ({
-                ...prev,
-                durationSeconds: Math.max(1, Math.round((Date.now() - startedAtMs) / 1000)),
-                reasoningSteps: [...(prev.reasoningSteps || []).slice(-8), cleaned],
-              }));
+              ensureLiveReasoning(cleaned);
             }
             continue;
           }
@@ -448,31 +508,33 @@ export function runInteractiveAgentTurn(params: {
           ) {
             const rawItem = evt.item;
             if (!rawItem) continue;
-            const itemId = rawItem.id || `item_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`;
+            const itemId =
+              rawItem.id || `item_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`;
 
             if (rawItem.type === 'reasoning') {
-              const text = String(rawItem.text || '').trim();
-              if (liveReasoningAdded) {
-                params.callbacks.onItemUpdated(liveReasoningId, (prev) => ({
-                  ...prev,
-                  status: evt.type === 'item.completed' ? 'completed' : 'streaming',
-                  durationSeconds: Math.max(1, Math.round((Date.now() - startedAtMs) / 1000)),
-                  reasoningSteps: text
-                    ? [...(prev.reasoningSteps || []), text]
-                    : prev.reasoningSteps,
-                }));
+              const text = extractReasoningText(rawItem);
+              if (text) {
+                ensureLiveReasoning(text);
+              }
+            } else if (rawItem.type === 'todo_list') {
+              const todoItems = Array.isArray(rawItem.items) ? rawItem.items : [];
+              const todoTurnItem: TurnItem = {
+                id: itemId,
+                type: 'todoList',
+                status: evt.type === 'item.completed' ? 'completed' : 'streaming',
+                timestamp: nowTime(),
+                todoItems,
+              };
+              if (!knownItemIds.has(itemId)) {
+                knownItemIds.add(itemId);
+                params.callbacks.onItemAdded(todoTurnItem);
               } else {
-                liveReasoningAdded = true;
-                params.callbacks.onItemAdded({
-                  id: liveReasoningId,
-                  type: 'reasoning',
-                  status: 'completed',
-                  timestamp: nowTime(),
-                  durationSeconds: Math.max(1, Math.round((Date.now() - startedAtMs) / 1000)),
-                  reasoningSteps: [text || 'Completed reasoning step'],
-                });
+                params.callbacks.onItemUpdated(itemId, () => todoTurnItem);
               }
             } else if (rawItem.type === 'command_execution') {
+              if (evt.type === 'item.started' && rawItem.command) {
+                ensureLiveReasoning(`执行命令: \`${rawItem.command}\``);
+              }
               const uiItem: TurnItem = {
                 id: itemId,
                 type: 'commandExecution',
@@ -566,18 +628,32 @@ export function runInteractiveAgentTurn(params: {
           }
 
           if (evt.type === 'turn.failed') {
+            if (liveReasoningAdded) {
+              params.callbacks.onItemUpdated(liveReasoningId, (prev) => ({
+                ...prev,
+                status: 'completed',
+                durationSeconds: Math.max(1, Math.round((Date.now() - startedAtMs) / 1000)),
+              }));
+            }
             params.callbacks.onItemAdded({
               id: `item_err_${Date.now()}`,
               type: 'agentMessage',
               status: 'failed',
               timestamp: nowTime(),
-              text: `**Codex Turn Error:** ${evt.error?.message || 'Execution failed'}`,
+              text: `**Codex 执行异常:** ${evt.error?.message || 'Execution failed'}`,
             });
             params.callbacks.onTurnStatusChange('completed');
           }
         }
       }
 
+      if (liveReasoningAdded) {
+        params.callbacks.onItemUpdated(liveReasoningId, (prev) => ({
+          ...prev,
+          status: 'completed',
+          durationSeconds: Math.max(1, Math.round((Date.now() - startedAtMs) / 1000)),
+        }));
+      }
       params.callbacks.onTurnStatusChange('completed');
     } catch (err: any) {
       if (err?.name === 'AbortError') {
@@ -589,7 +665,7 @@ export function runInteractiveAgentTurn(params: {
         type: 'agentMessage',
         status: 'completed',
         timestamp: nowTime(),
-        text: `Unable to reach local Codex server: ${String(err?.message || err)}`,
+        text: `无法连接到本机 Codex 服务: ${String(err?.message || err)}`,
       });
       params.callbacks.onTurnStatusChange('completed');
     }

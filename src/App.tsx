@@ -43,6 +43,7 @@ import {
   readWorkspaceFile,
   revertGitFile,
   runInteractiveAgentTurn,
+  saveCodexModelPreferences,
   sendJsonRpcRequest,
   stageGitFile,
   writeWorkspaceFile,
@@ -199,11 +200,20 @@ export function App() {
         });
       }
 
-      // Sync active thread model with local ~/.codex/config.toml default model
+      // Sync active thread model & reasoning effort with local ~/.codex/config.toml defaults
       const configuredModel = codexStatus.config?.effective?.model;
-      if (configuredModel) {
+      const configuredEffort = codexStatus.config?.effective?.reasoningEffort as any;
+      if (configuredModel || configuredEffort) {
         setThreads((prev) =>
-          prev.map((th, idx) => (idx === 0 ? { ...th, model: configuredModel } : th))
+          prev.map((th, idx) =>
+            idx === 0
+              ? {
+                  ...th,
+                  model: configuredModel || th.model,
+                  reasoningEffort: configuredEffort || th.reasoningEffort,
+                }
+              : th
+          )
         );
       }
     }
@@ -819,9 +829,18 @@ export function App() {
               setRightTab('diff');
               setRightDrawerOpen(true);
             }}
-            onUpdateThreadConfig={(id, patch) =>
-              updateThread(id, (th) => ({ ...th, ...patch }))
-            }
+            onUpdateThreadConfig={async (id, patch, syncToGlobalConfig) => {
+              updateThread(id, (th) => ({ ...th, ...patch }));
+              if (syncToGlobalConfig && (patch.model || patch.reasoningEffort)) {
+                const res = await saveCodexModelPreferences({
+                  model: patch.model,
+                  reasoningEffort: patch.reasoningEffort,
+                });
+                if (res.ok && res.status) {
+                  setLocalCodexStatus(res.status);
+                }
+              }
+            }}
             onSendMessage={handleSendMessage}
             onSteerTurn={handleSteerTurn}
             onInterruptTurn={handleInterruptTurn}

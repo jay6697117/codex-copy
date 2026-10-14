@@ -2,7 +2,7 @@
   "name": "codex-desktop-app",
   "version": "1.0.0",
   "private": true,
-  "description": "OpenAI Codex Desktop App — Multi-Agent Command Center (Electron + React + TypeScript + JSON-RPC 2.0 Lite App-Server)",
+  "description": "OpenAI Codex Desktop App — Multi-Agent Command Center (macOS & Windows Desktop + Local Codex CLI Bridge)",
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
@@ -11,8 +11,13 @@
     "start": "node scripts/start-all.mjs",
     "build": "tsc -b && BROWSERSLIST_CONFIG=./.browserslistrc vite build",
     "preview": "vite preview --port 4173",
+    "package": "node scripts/package-desktop.mjs",
+    "package:mac": "node scripts/package-desktop.mjs --mac",
+    "package:win": "node scripts/package-desktop.mjs --win",
     "electron:dev": "ELECTRON_START_URL=http://localhost:5173 electron electron/main.cjs",
-    "electron:start": "npm run build && electron electron/main.cjs"
+    "electron:start": "npm run build && electron electron/main.cjs",
+    "dist:mac": "npm run build && electron-builder --mac --config electron-builder.json",
+    "dist:win": "npm run build && electron-builder --win --config electron-builder.json"
   },
   "dependencies": {
     "lucide-react": "^0.475.0",
