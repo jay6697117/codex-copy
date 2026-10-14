@@ -874,7 +874,7 @@ export function App() {
             <p className="mt-1 codex-text-secondary">
               {bridgeError || (bridgeConnected
                 ? '文件、终端和任务在你的电脑上运行。刷新页面会断开连接。'
-                : '执行任务需连接你自己的电脑。请先在项目目录运行 npm run server，再连接本机服务。')}
+                : '执行任务需连接你自己的电脑。请先安装桌面版APP，再连接本机服务。')}
             </p>
           </div>
           <button
