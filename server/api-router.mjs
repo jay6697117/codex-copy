@@ -10,6 +10,7 @@ import { promisify } from 'node:util';
 import {
   buildAugmentedPath,
   createOrAddWorkspace,
+  getActiveTurnStatus,
   inspectGitRepository,
   inspectLocalCodexEnvironment,
   interruptLocalCodexTurn,
@@ -224,8 +225,10 @@ function readJsonBody(req) {
 }
 
 function sendJson(res, status, data) {
+  if (res.headersSent) return;
   res.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
+    'Cache-Control': 'no-cache',
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization',
@@ -234,6 +237,9 @@ function sendJson(res, status, data) {
 }
 
 export async function handleApiRequest(req, res, rawWorkspaceRoot = process.cwd()) {
+  req.on?.('error', () => {});
+  res.on?.('error', () => {});
+
   const workspaceRoot = resolveEffectiveWorkspace(rawWorkspaceRoot);
   const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
   const pathname = url.pathname;
@@ -376,23 +382,48 @@ export async function handleApiRequest(req, res, rawWorkspaceRoot = process.cwd(
     return true;
   }
 
-  // 3. Real Streaming Turn Execution via Local `codex exec --json -`
+  // 3. Real Streaming Turn Execution via Local `codex exec --json -` (with Heartbeat + Stateful Resume)
   if (req.method === 'POST' && pathname === '/api/codex/turn-stream') {
     try {
+      req.setTimeout?.(0);
+      res.setTimeout?.(0);
+      req.socket?.setTimeout?.(0);
+      req.socket?.setNoDelay?.(true);
+      req.socket?.setKeepAlive?.(true, 15000);
+
       const body = await readJsonBody(req);
       await streamLocalCodexTurn(
         {
           ...body,
           cwd: body.cwd || workspaceRoot,
         },
-        res
+        res,
+        req
       );
     } catch (err) {
       if (!res.headersSent) {
         sendJson(res, 500, { error: String(err.message || err) });
       } else {
-        res.end();
+        try {
+          res.end();
+        } catch {
+          // ignore
+        }
       }
+    }
+    return true;
+  }
+
+  // 3b. Query Active or Completed Turn Session Status & Incremental Events (Polling / Fallback Recovery)
+  if (req.method === 'GET' && pathname === '/api/codex/turn-status') {
+    try {
+      const turnId = url.searchParams.get('turnId') || '';
+      const threadId = url.searchParams.get('threadId') || '';
+      const sinceSeq = Number(url.searchParams.get('sinceSeq') || 0);
+      const statusData = getActiveTurnStatus(turnId || threadId, sinceSeq);
+      sendJson(res, 200, statusData);
+    } catch (err) {
+      sendJson(res, 500, { ok: false, error: String(err.message || err) });
     }
     return true;
   }

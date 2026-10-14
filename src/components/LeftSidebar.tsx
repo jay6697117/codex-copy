@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   Clock,
   Compass,
@@ -6,6 +6,7 @@ import {
   FolderOpen,
   FolderPlus,
   ChevronDown,
+  ChevronRight,
   Search,
   PanelLeft,
   SquarePen,
@@ -19,6 +20,8 @@ import {
   ArrowLeft,
   ArrowRight,
   Plus,
+  X,
+  Loader2,
 } from 'lucide-react';
 import {
   AppLanguage,
@@ -41,9 +44,11 @@ interface LeftSidebarProps {
   onSelectProject: (projectId: string) => void;
   onToggleProjectExpand: (projectId: string) => void;
   onOpenWorkspaceModal: () => void;
+  onRemoveProject?: (projectId: string) => void;
   threads: Thread[];
   activeThreadId: string;
   onSelectThread: (threadId: string) => void;
+  onDeleteThread?: (threadId: string) => void;
   onCreateNewThread: (projectId?: string, quickChat?: boolean) => void;
   onOpenCommandPalette: () => void;
   pendingReviewCount: number;
@@ -52,6 +57,11 @@ interface LeftSidebarProps {
   worktrees: WorktreeInfo[];
   localCodexStatus: LocalCodexStatus | null;
   onRefreshLocalStatus: () => void;
+}
+
+function normalizePath(p?: string): string {
+  if (!p) return '';
+  return p.trim().replace(/[\\/]+$/, '');
 }
 
 export const LeftSidebar: React.FC<LeftSidebarProps> = ({
@@ -65,9 +75,11 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
   onSelectProject,
   onToggleProjectExpand,
   onOpenWorkspaceModal,
+  onRemoveProject,
   threads,
   activeThreadId,
   onSelectThread,
+  onDeleteThread,
   onCreateNewThread,
   onOpenCommandPalette,
   localCodexStatus,
@@ -75,60 +87,85 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
 }) => {
   const i18n = t(lang);
 
-  // Deduplicate active project threads and separate them from `最近` (Recents)
-  const activeProjectThreadIds = new Set<string>();
-  const activeProjectTitles = new Set<string>();
+  const [projectsSectionCollapsed, setProjectsSectionCollapsed] = useState(false);
+  const [recentSectionCollapsed, setRecentSectionCollapsed] = useState(false);
+  const [showAllRecent, setShowAllRecent] = useState(false);
+  const [showAllProjects, setShowAllProjects] = useState(false);
 
+  // Set of normalized repoPaths for workspaces registered in THIS Desktop App
+  const registeredProjectPaths = new Set(
+    projects.map((p) => normalizePath(p.repoPath)).filter(Boolean)
+  );
+
+  const assignedThreadIds = new Set<string>();
+  const assignedTitlesByProject = new Map<string, Set<string>>();
+
+  /**
+   * Strictly match threads to a specific project by normalized `cwd === project.repoPath`
+   * (or `projectId === project.id` ONLY when `th.cwd` is unset), preventing a prompt sent in
+   * `/Users/zhangjinhui/Desktop/my-g4-app` from ever appearing under other directories!
+   */
   const getProjectThreads = (project: ProjectWorkspace) => {
-    const seen = new Set<string>();
+    const projPath = normalizePath(project.repoPath);
+    if (!assignedTitlesByProject.has(project.id)) {
+      assignedTitlesByProject.set(project.id, new Set());
+    }
+    const seenTitles = assignedTitlesByProject.get(project.id)!;
+
     return threads.filter((th) => {
-      if (th.isLocalCliSession) return false;
       if (th.turns.length === 0) return false;
-      const matchesProj =
-        th.projectId === project.id ||
-        (th.cwd && th.cwd === project.repoPath);
-      if (!matchesProj) return false;
-      if (seen.has(th.title)) return false;
-      seen.add(th.title);
-      activeProjectThreadIds.add(th.id);
-      activeProjectTitles.add(th.title);
+      const thPath = normalizePath(th.cwd);
+      const matchesPath = thPath
+        ? thPath === projPath
+        : th.projectId === project.id;
+      if (!matchesPath) return false;
+
+      // Only show threads created/interacted with in this app under the project folder
+      if (th.isLocalCliSession) return false;
+
+      if (seenTitles.has(th.title)) return false;
+      seenTitles.add(th.title);
+      assignedThreadIds.add(th.id);
       return true;
     });
   };
 
-  // Pre-compute project thread sets so `最近` doesn't duplicate active project threads
   for (const p of projects) {
     getProjectThreads(p);
   }
 
+  // Only include recent threads that belong to registered workspaces in this app
+  // and are not already displayed under their expanded project folder.
   const recentThreads = (() => {
-    const seenTitles = new Set<string>(activeProjectTitles);
+    const seenTitles = new Set<string>();
     return threads.filter((th) => {
-      if (th.id === 'thr_workspace_main' && th.turns.length === 0) return false;
-      if (activeProjectThreadIds.has(th.id)) return false;
-      const key = `${th.title}_${th.cliSessionId || ''}`;
-      if (seenTitles.has(th.title) || seenTitles.has(key)) return false;
+      if (th.turns.length === 0) return false;
+      if (assignedThreadIds.has(th.id)) return false;
+      const thPath = normalizePath(th.cwd);
+      if (thPath && !registeredProjectPaths.has(thPath)) return false;
+      if (seenTitles.has(th.title)) return false;
       seenTitles.add(th.title);
-      seenTitles.add(key);
       return true;
     });
   })();
 
+  const visibleProjects = showAllProjects ? projects : projects.slice(0, 6);
+  const visibleRecentThreads = showAllRecent
+    ? recentThreads
+    : recentThreads.slice(0, 5);
+
   return (
     <div className="flex flex-col h-full min-h-0 overflow-hidden shrink-0 select-none">
       {/* =====================================================================
-          ROW 1 (Fix for Red Box 1): Unified Top Titlebar Row (`h-10`)
-          - Leftmost 74px is clean empty space for native macOS Window Traffic Lights
-            (NO duplicate HTML traffic-light dots!)
-          - Immediately to the right (`pl-[76px]`) on the exact same horizontal line:
-            `←` (Back), `→` (Forward), and `[|]` (Sidebar Collapse Toggle)
+          ROW 1: Unified Top Titlebar Row (`h-10`)
+          - 74px native macOS Window Traffic Lights region
+          - `←` (Back), `→` (Forward), and `[|]` (Sidebar Collapse Toggle)
          ===================================================================== */}
       <div
         className={`h-10 flex items-center app-drag-region shrink-0 border-r codex-border ${
           collapsed ? 'w-[46px] bg-[#141414]' : 'w-[274px] bg-[#161616]'
         }`}
       >
-        {/* Native macOS Traffic Lights sit inside this 74px drag region */}
         <div className="w-[74px] h-full shrink-0" />
 
         {!collapsed && (
@@ -159,16 +196,11 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
       </div>
 
       {/* =====================================================================
-          ROW 2 (Fix for Red Box 1 & Red Box 2): Dual-Column Body (`flex-1 min-h-0 overflow-hidden`)
-          - Column 1 (`w-[46px]`): `Home` icon at top aligns horizontally with `Codex ⌄`,
-            and `↓` + `XX` sit flush at the bottom with zero height gap!
-          - Column 2 (`w-[228px]`): `Codex ⌄` header at top, scrollable `项目` & `最近`
-            constrained inside `min-h-0 overflow-y-auto` so it never overflows 100vh!
+          ROW 2: Dual-Column Body (`flex-1 min-h-0 overflow-hidden`)
          ===================================================================== */}
       <div className="flex-1 min-h-0 flex overflow-hidden">
         {/* Column 1: 46px Narrow Vertical Icon Rail */}
         <div className="w-[46px] h-full min-h-0 bg-[#141414] border-r border-white/[0.06] flex flex-col items-center justify-between pt-1 pb-3 shrink-0 z-30">
-          {/* Top 7 Navigation Icons (`Home` aligns horizontally with `Codex ⌄`) */}
           <div className="flex flex-col items-center gap-1.5 w-full">
             <button
               onClick={() => {
@@ -254,7 +286,6 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
             </button>
           </div>
 
-          {/* Bottom Icons: Flush at the bottom of the 46px rail (Fix for Red Box 2) */}
           <div className="flex flex-col items-center gap-2.5 shrink-0">
             <button
               onClick={onRefreshLocalStatus}
@@ -281,7 +312,6 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
         {/* Column 2: 228px `Codex` Sidebar */}
         {!collapsed && (
           <aside className="w-[228px] h-full min-h-0 codex-sidebar-bg border-r codex-border flex flex-col overflow-hidden shrink-0">
-            {/* `Codex ⌄` Header Row — Horizontally aligned with `Home` icon in Column 1 */}
             <div className="h-9 px-3.5 flex items-center justify-between shrink-0">
               <button
                 onClick={() => onSelectNav('codex_config')}
@@ -338,12 +368,26 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
               </button>
             </div>
 
-            {/* Scrollable `项目` (Projects) & `最近` (Recents) — Strictly constrained with `min-h-0` */}
-            <div className="flex-1 min-h-0 overflow-y-auto px-2 pt-4 pb-4 space-y-5">
-              {/* Section: `项目` (with `+` New/Open Workspace Button!) */}
+            {/* Scrollable `项目` (Projects) & `最近` (Recents) — Both Collapsible! */}
+            <div className="flex-1 min-h-0 overflow-y-auto px-2 pt-4 pb-4 space-y-4">
+              {/* Section 1: `项目` (Collapsible + New Workspace Button) */}
               <div>
-                <div className="px-2.5 pb-1 flex items-center justify-between text-[11.5px] codex-text-muted font-medium">
-                  <span>{lang === 'zh-CN' ? '项目' : 'Projects'}</span>
+                <div className="px-2 pb-1 flex items-center justify-between text-[11.5px] codex-text-muted font-medium">
+                  <button
+                    type="button"
+                    onClick={() => setProjectsSectionCollapsed((v) => !v)}
+                    className="flex items-center gap-1 hover:text-white transition-colors"
+                  >
+                    {projectsSectionCollapsed ? (
+                      <ChevronRight className="w-3 h-3" />
+                    ) : (
+                      <ChevronDown className="w-3 h-3" />
+                    )}
+                    <span>
+                      {lang === 'zh-CN' ? '项目' : 'Projects'} ({projects.length})
+                    </span>
+                  </button>
+
                   <button
                     onClick={onOpenWorkspaceModal}
                     title="新建或导入工作目录 / 工作空间"
@@ -353,111 +397,216 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                   </button>
                 </div>
 
-                <div className="space-y-0.5">
-                  {projects.map((project) => {
-                    const isActiveProj = project.id === activeProjectId;
-                    const projThreads = getProjectThreads(project);
-                    return (
-                      <div key={project.id} className="space-y-0.5">
-                        <div
-                          className={`group flex items-center justify-between px-2.5 py-1.5 rounded-lg text-[13px] transition-colors ${
-                            isActiveProj
-                              ? 'codex-text-primary font-medium bg-white/[0.04]'
-                              : 'codex-text-secondary codex-hover'
-                          }`}
-                        >
-                          <button
-                            onClick={() => {
-                              onSelectProject(project.id);
-                              onToggleProjectExpand(project.id);
-                            }}
-                            title={project.repoPath}
-                            className="flex items-center gap-2 flex-1 text-left truncate"
+                {!projectsSectionCollapsed && (
+                  <div className="space-y-0.5">
+                    {visibleProjects.map((project) => {
+                      const isActiveProj = project.id === activeProjectId;
+                      const projThreads = getProjectThreads(project);
+                      return (
+                        <div key={project.id} className="space-y-0.5">
+                          <div
+                            className={`group flex items-center justify-between px-2.5 py-1.5 rounded-lg text-[13px] transition-colors ${
+                              isActiveProj
+                                ? 'codex-text-primary font-medium bg-white/[0.05]'
+                                : 'codex-text-secondary codex-hover'
+                            }`}
                           >
-                            {project.expanded ? (
-                              <FolderOpen className="w-4 h-4 codex-text-secondary shrink-0" />
-                            ) : (
-                              <Folder className="w-4 h-4 codex-text-secondary shrink-0" />
-                            )}
-                            <span className="truncate">{project.name}</span>
-                          </button>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onSelectProject(project.id);
-                              onCreateNewThread(project.id, false);
-                            }}
-                            title={`在 ${project.name} (${project.repoPath}) 中新建聊天`}
-                            className="p-0.5 opacity-0 group-hover:opacity-100 codex-text-muted hover:codex-text-primary rounded transition-opacity"
-                          >
-                            <Plus className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
+                            <button
+                              onClick={() => {
+                                onSelectProject(project.id);
+                                onToggleProjectExpand(project.id);
+                              }}
+                              title={project.repoPath}
+                              className="flex items-center gap-2 flex-1 text-left truncate"
+                            >
+                              {project.expanded ? (
+                                <FolderOpen className="w-4 h-4 codex-text-secondary shrink-0" />
+                              ) : (
+                                <Folder className="w-4 h-4 codex-text-secondary shrink-0" />
+                              )}
+                              <span className="truncate">{project.name}</span>
+                            </button>
 
-                        {project.expanded && (
-                          <div className="pl-6 space-y-0.5">
-                            {projThreads.length === 0 ? (
-                              <div className="px-2 py-1 text-[12px] codex-text-muted">
-                                {lang === 'zh-CN' ? '暂无聊天' : 'No chats yet'}
-                              </div>
-                            ) : (
-                              projThreads.map((th) => {
-                                const isSelected =
-                                  activeNav === 'threads' && th.id === activeThreadId;
-                                return (
-                                  <button
-                                    key={th.id}
-                                    onClick={() => {
-                                      onSelectNav('threads');
-                                      onSelectThread(th.id);
-                                    }}
-                                    className={`w-full text-left px-2.5 py-1 rounded-lg text-[12.5px] truncate transition-colors block ${
-                                      isSelected
-                                        ? 'codex-active codex-text-primary font-medium'
-                                        : 'codex-text-secondary codex-hover'
-                                    }`}
-                                  >
-                                    {th.title}
-                                  </button>
-                                );
-                              })
+                            <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onSelectProject(project.id);
+                                  onCreateNewThread(project.id, false);
+                                }}
+                                title={`在 ${project.name} 中新建聊天`}
+                                className="p-0.5 codex-text-muted hover:codex-text-primary rounded"
+                              >
+                                <Plus className="w-3.5 h-3.5" />
+                              </button>
+                              {projects.length > 1 && onRemoveProject && (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onRemoveProject(project.id);
+                                  }}
+                                  title="从侧边栏移除此目录"
+                                  className="p-0.5 codex-text-muted hover:text-rose-400 rounded"
+                                >
+                                  <X className="w-3 h-3" />
+                                </button>
+                              )}
+                            </div>
+                          </div>
+
+                          {project.expanded && (
+                            <div className="pl-6 space-y-0.5">
+                              {projThreads.length === 0 ? (
+                                <div className="px-2 py-1 text-[12px] codex-text-muted">
+                                  {lang === 'zh-CN' ? '暂无聊天' : 'No chats yet'}
+                                </div>
+                              ) : (
+                                projThreads.map((th) => {
+                                  const isSelected =
+                                    activeNav === 'threads' && th.id === activeThreadId;
+                                  const isRunningTh = th.status === 'running';
+                                  return (
+                                    <div
+                                      key={th.id}
+                                      className={`group flex items-center justify-between px-2.5 py-1 rounded-lg text-[12.5px] transition-colors ${
+                                        isSelected
+                                          ? 'codex-active codex-text-primary font-medium'
+                                          : 'codex-text-secondary codex-hover'
+                                      }`}
+                                    >
+                                      <button
+                                        onClick={() => {
+                                          onSelectNav('threads');
+                                          onSelectThread(th.id);
+                                        }}
+                                        className="flex-1 text-left truncate flex items-center gap-1.5"
+                                      >
+                                        {isRunningTh && (
+                                          <Loader2 className="w-3 h-3 text-[#388BFD] animate-spin shrink-0" />
+                                        )}
+                                        <span className="truncate">{th.title}</span>
+                                      </button>
+                                      {onDeleteThread && (
+                                        <button
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            onDeleteThread(th.id);
+                                          }}
+                                          title="移除此会话"
+                                          className="opacity-0 group-hover:opacity-100 p-0.5 codex-text-muted hover:text-rose-400 rounded"
+                                        >
+                                          <X className="w-3 h-3" />
+                                        </button>
+                                      )}
+                                    </div>
+                                  );
+                                })
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+
+                    {projects.length > 6 && (
+                      <button
+                        type="button"
+                        onClick={() => setShowAllProjects((v) => !v)}
+                        className="w-full text-left px-2.5 py-1 text-[11.5px] text-[#8E8E93] hover:text-white transition-colors"
+                      >
+                        {showAllProjects
+                          ? '收起多余项目目录'
+                          : `展开全部 ${projects.length} 个项目...`}
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Section 2: `最近` (Collapsible + Show More/Less Toggle, Scoped to App Workspaces) */}
+              {recentThreads.length > 0 && (
+                <div>
+                  <div className="px-2 pb-1 flex items-center justify-between text-[11.5px] codex-text-muted font-medium">
+                    <button
+                      type="button"
+                      onClick={() => setRecentSectionCollapsed((v) => !v)}
+                      className="flex items-center gap-1 hover:text-white transition-colors"
+                    >
+                      {recentSectionCollapsed ? (
+                        <ChevronRight className="w-3 h-3" />
+                      ) : (
+                        <ChevronDown className="w-3 h-3" />
+                      )}
+                      <span>
+                        {lang === 'zh-CN' ? '最近' : 'Recent'} ({recentThreads.length})
+                      </span>
+                    </button>
+
+                    {recentThreads.length > 5 && !recentSectionCollapsed && (
+                      <button
+                        type="button"
+                        onClick={() => setShowAllRecent((v) => !v)}
+                        className="text-[11px] text-[#8E8E93] hover:text-white"
+                      >
+                        {showAllRecent ? '收起' : '全部'}
+                      </button>
+                    )}
+                  </div>
+
+                  {!recentSectionCollapsed && (
+                    <div className="space-y-0.5">
+                      {visibleRecentThreads.map((thread) => {
+                        const isSelected =
+                          activeNav === 'threads' && thread.id === activeThreadId;
+                        return (
+                          <div
+                            key={thread.id}
+                            className={`group flex items-center justify-between px-2.5 py-1.5 rounded-lg text-[13px] transition-colors ${
+                              isSelected
+                                ? 'codex-active codex-text-primary font-medium'
+                                : 'codex-text-secondary hover:codex-text-primary codex-hover'
+                            }`}
+                          >
+                            <button
+                              onClick={() => {
+                                onSelectNav('threads');
+                                onSelectThread(thread.id);
+                              }}
+                              className="flex-1 text-left truncate"
+                            >
+                              {thread.title}
+                            </button>
+                            {onDeleteThread && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onDeleteThread(thread.id);
+                                }}
+                                title="隐藏此会话"
+                                className="opacity-0 group-hover:opacity-100 p-0.5 codex-text-muted hover:text-rose-400 rounded shrink-0"
+                              >
+                                <X className="w-3 h-3" />
+                              </button>
                             )}
                           </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
+                        );
+                      })}
 
-              {/* Section: `最近` (Recents) */}
-              <div>
-                <div className="px-2.5 pb-1 text-[11.5px] codex-text-muted font-medium">
-                  {lang === 'zh-CN' ? '最近' : 'Recent'}
+                      {recentThreads.length > 5 && (
+                        <button
+                          type="button"
+                          onClick={() => setShowAllRecent((v) => !v)}
+                          className="w-full text-left px-2.5 py-1 text-[11.5px] text-[#8E8E93] hover:text-white transition-colors"
+                        >
+                          {showAllRecent
+                            ? '收起较早会话'
+                            : `展开更多 (${recentThreads.length - 5} 条)...`}
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
-                <div className="space-y-0.5">
-                  {recentThreads.map((thread) => {
-                    const isSelected =
-                      activeNav === 'threads' && thread.id === activeThreadId;
-                    return (
-                      <button
-                        key={thread.id}
-                        onClick={() => {
-                          onSelectNav('threads');
-                          onSelectThread(thread.id);
-                        }}
-                        className={`w-full text-left px-2.5 py-1.5 rounded-lg text-[13px] truncate transition-colors block ${
-                          isSelected
-                            ? 'codex-active codex-text-primary font-medium'
-                            : 'codex-text-secondary hover:codex-text-primary codex-hover'
-                        }`}
-                      >
-                        {thread.title}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
+              )}
             </div>
           </aside>
         )}

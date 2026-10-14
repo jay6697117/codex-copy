@@ -22,6 +22,19 @@ const STATIC_DIR =
   process.env.CODEX_STATIC_DIR || path.resolve(__dirname, '..', 'dist');
 const isStdioMode = process.argv.includes('stdio://') || process.argv.includes('--stdio');
 
+// Prevent unhandled stream/pipe errors (e.g. EPIPE / ECONNRESET) from crashing the daemon
+process.on('uncaughtException', (err) => {
+  if (!isStdioMode) {
+    console.error('[codex app-server] uncaughtException (recovered):', err?.message || err);
+  }
+});
+
+process.on('unhandledRejection', (reason) => {
+  if (!isStdioMode) {
+    console.error('[codex app-server] unhandledRejection (recovered):', reason);
+  }
+});
+
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'application/javascript; charset=utf-8',
@@ -104,14 +117,48 @@ if (isStdioMode) {
   });
 } else {
   const server = http.createServer(async (req, res) => {
-    const handled = await handleApiRequest(req, res, WORKSPACE_ROOT);
-    if (handled) return;
+    try {
+      const handled = await handleApiRequest(req, res, WORKSPACE_ROOT);
+      if (handled) return;
 
-    const servedStatic = await serveStaticAsset(req, res);
-    if (servedStatic) return;
+      const servedStatic = await serveStaticAsset(req, res);
+      if (servedStatic) return;
 
-    res.writeHead(404, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'Not Found' }));
+      if (!res.headersSent) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Not Found' }));
+      }
+    } catch (err) {
+      console.error('[codex app-server] request error:', err?.message || err);
+      if (!res.headersSent) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: String(err?.message || err) }));
+      } else {
+        try {
+          res.end();
+        } catch {
+          // ignore
+        }
+      }
+    }
+  });
+
+  // Disable Node 18+/22+/25+ default 300s requestTimeout so long `xhigh` Codex turns never get severed mid-stream
+  server.requestTimeout = 0;
+  server.timeout = 0;
+  server.headersTimeout = 0;
+  server.keepAliveTimeout = 65000;
+
+  server.on('connection', (socket) => {
+    socket.setNoDelay(true);
+    socket.setKeepAlive(true, 15000);
+    socket.setTimeout(0);
+    socket.on('error', () => {});
+  });
+
+  server.on('clientError', (err, socket) => {
+    if (err.code === 'ECONNRESET' || !socket.writable) return;
+    socket.end('HTTP/1.1 400 Bad Request\r\n\r\n');
   });
 
   server.listen(PORT, '127.0.0.1', () => {

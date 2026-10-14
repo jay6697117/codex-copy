@@ -37,6 +37,7 @@ import {
   GitCommit,
   ArrowLeft,
   ArrowRight,
+  AudioLines,
 } from 'lucide-react';
 import {
   AppLanguage,
@@ -55,6 +56,7 @@ import {
   ThemeSkin,
   Thread,
   ThreadGoal,
+  Turn,
   TurnItem,
   WorktreeInfo,
 } from '../types/codex';
@@ -182,17 +184,26 @@ const REAL_CODEX_MODELS: CodexModelInfo[] = [
   },
 ];
 
+/**
+ * Official 6-Stop Reasoning Effort Ladder matching the real OpenAI Codex App screenshots:
+ * - Stop 0: `low` -> `低` / `Light`
+ * - Stop 1: `medium` -> `中` / `Medium`
+ * - Stop 2: `high` -> `高` / `High`
+ * - Stop 3: `xhigh` -> `极高` / `Extra High` (Official Screenshot `5D0327A7...`)
+ * - Stop 4: `max` -> `Max` / `Max` (Official Screenshot `F4D978F4...`)
+ * - Stop 5: `ultra` -> `Ultra` / `Ultra` (Official Screenshot `3EFE149D...` with Cosmic Starfield Track)
+ */
 const SLIDER_EFFORT_STOPS: Array<{
   id: ReasoningEffort;
   labelZh: string;
   labelEn: string;
 }> = [
-  { id: 'low', labelZh: '低', labelEn: 'Low' },
+  { id: 'low', labelZh: '低', labelEn: 'Light' },
   { id: 'medium', labelZh: '中', labelEn: 'Medium' },
   { id: 'high', labelZh: '高', labelEn: 'High' },
   { id: 'xhigh', labelZh: '极高', labelEn: 'Extra High' },
-  { id: 'uhigh', labelZh: '超高', labelEn: 'Ultra High' },
-  { id: 'max', labelZh: '最大', labelEn: 'Max' },
+  { id: 'max', labelZh: 'Max', labelEn: 'Max' },
+  { id: 'ultra', labelZh: 'Ultra', labelEn: 'Ultra' },
 ];
 
 function isCleanReasoningStep(step: string): boolean {
@@ -258,8 +269,10 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
   const [editingGoal, setEditingGoal] = useState(false);
   const [goalDraft, setGoalDraft] = useState(thread.goal?.objective || '');
   const [liveThinkingTick, setLiveThinkingTick] = useState(1);
+  const [isDraggingSlider, setIsDraggingSlider] = useState(false);
 
   const scrollEndRef = useRef<HTMLDivElement>(null);
+  const sliderTrackRef = useRef<HTMLDivElement>(null);
 
   const isRunning = thread.status === 'running';
   const envMode: ExecutionEnvironmentMode = thread.environmentMode || 'local';
@@ -306,18 +319,53 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
     modelCatalog.find((m) => m.slug === 'gpt-6.1-sol') ||
     modelCatalog[1];
 
+  const normalizedEffort: ReasoningEffort =
+    thread.reasoningEffort === 'minimal'
+      ? 'low'
+      : thread.reasoningEffort === 'uhigh'
+      ? 'max'
+      : thread.reasoningEffort || 'xhigh';
+
   const activeStopIndex = Math.max(
     0,
-    SLIDER_EFFORT_STOPS.findIndex(
-      (s) =>
-        s.id ===
-        (thread.reasoningEffort === 'minimal' ? 'low' : thread.reasoningEffort || 'xhigh')
-    )
+    SLIDER_EFFORT_STOPS.findIndex((s) => s.id === normalizedEffort)
   );
   const currentStop =
     SLIDER_EFFORT_STOPS[activeStopIndex] || SLIDER_EFFORT_STOPS[3];
   const currentEffortLabel =
     lang === 'zh-CN' ? currentStop.labelZh : currentStop.labelEn;
+  const isUltraStop = currentStop.id === 'ultra';
+
+  const updateEffortFromClientX = (clientX: number) => {
+    const trackEl = sliderTrackRef.current;
+    if (!trackEl) return;
+    const rect = trackEl.getBoundingClientRect();
+    const pad = 17;
+    const usableWidth = Math.max(1, rect.width - pad * 2);
+    const relX = Math.max(0, Math.min(usableWidth, clientX - rect.left - pad));
+    const ratio = relX / usableWidth;
+    const nextIdx = Math.round(ratio * (SLIDER_EFFORT_STOPS.length - 1));
+    const targetStop = SLIDER_EFFORT_STOPS[nextIdx];
+    if (targetStop && targetStop.id !== currentStop.id) {
+      onUpdateThreadConfig(thread.id, { reasoningEffort: targetStop.id }, true);
+    }
+  };
+
+  useEffect(() => {
+    if (!isDraggingSlider) return;
+    const onMove = (e: PointerEvent) => {
+      updateEffortFromClientX(e.clientX);
+    };
+    const onUp = () => {
+      setIsDraggingSlider(false);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+    };
+  }, [isDraggingSlider, currentStop.id, thread.id]);
 
   const toggleItemExpand = (itemId: string, currentlyOpen: boolean) => {
     setExpandedItems((prev) => ({ ...prev, [itemId]: !currentlyOpen }));
@@ -583,6 +631,107 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
     return '';
   };
 
+  /**
+   * Compute the live execution status summary for an in-progress turn (`turn.status === 'in_progress'`)
+   * so that even after multiple commands complete with `exit 0` (as in Screenshot 1 `20BD3693...`),
+   * the user ALWAYS sees a live animated indicator at the bottom of the turn!
+   */
+  const renderLiveTurnActivityBar = (turn: Turn) => {
+    if (turn.status !== 'in_progress') return null;
+
+    const nonUserItems = turn.items.filter((i) => i.type !== 'userMessage');
+    const lastItem = nonUserItems[nonUserItems.length - 1];
+    const completedCommands = nonUserItems.filter(
+      (i) => i.type === 'commandExecution' && i.status === 'completed'
+    ).length;
+    const streamingCommand = nonUserItems.find(
+      (i) => i.type === 'commandExecution' && i.status === 'streaming'
+    );
+
+    const turnStartedMs = Date.parse(turn.startedAt) || Date.now();
+    const totalElapsedSec = Math.max(
+      liveThinkingTick,
+      Math.round((Date.now() - turnStartedMs) / 1000)
+    );
+
+    let activityHeadline =
+      lang === 'zh-CN'
+        ? '正在思考并分析工作空间上下文...'
+        : 'Thinking and analyzing workspace context...';
+    let activitySubtext = '';
+
+    if (streamingCommand) {
+      activityHeadline =
+        lang === 'zh-CN'
+          ? '正在执行终端命令...'
+          : 'Executing terminal command...';
+      activitySubtext = streamingCommand.command || '';
+    } else if (lastItem?.type === 'commandExecution') {
+      activityHeadline =
+        lang === 'zh-CN'
+          ? '正在分析命令执行结果并规划下一步操作...'
+          : 'Analyzing command output and planning next step...';
+      activitySubtext = lastItem.command || '';
+    } else if (lastItem?.type === 'fileChange') {
+      activityHeadline =
+        lang === 'zh-CN'
+          ? `已编辑 ${lastItem.filePath}，正在验证代码变更...`
+          : `Edited ${lastItem.filePath}, verifying changes...`;
+    } else if (lastItem?.type === 'agentMessage') {
+      activityHeadline =
+        lang === 'zh-CN'
+          ? '正在继续执行代码阶段任务与工具调用...'
+          : 'Continuing code phase execution...';
+    } else if (lastItem?.type === 'reasoning') {
+      const latestReasoningHeadline = extractLatestHeadline(lastItem.reasoningSteps);
+      if (latestReasoningHeadline) {
+        activityHeadline = latestReasoningHeadline;
+      }
+    }
+
+    return (
+      <div className="rounded-xl bg-[#18181B]/95 border border-[#388BFD]/30 px-3.5 py-2.5 flex items-center justify-between gap-3 shadow-lg">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <div className="relative flex items-center justify-center w-4 h-4 shrink-0">
+            <span className="absolute inset-0 rounded-full bg-[#388BFD]/30 animate-ping" />
+            <Loader2 className="w-3.5 h-3.5 text-[#388BFD] animate-spin relative z-10" />
+          </div>
+
+          <div className="min-w-0 flex items-center gap-2">
+            <span className="text-xs font-medium text-[#E5E5EA] truncate">
+              {activityHeadline}
+            </span>
+            {activitySubtext && (
+              <span className="text-[11px] font-mono text-[#8E8E93] truncate max-w-[260px] hidden sm:inline">
+                · {activitySubtext}
+              </span>
+            )}
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2.5 shrink-0">
+          {completedCommands > 0 && (
+            <span className="text-[10.5px] font-mono px-2 py-0.5 rounded-md bg-white/[0.05] border border-white/[0.08] text-[#A1A1A6]">
+              {lang === 'zh-CN'
+                ? `已执行 ${completedCommands} 步`
+                : `${completedCommands} steps`}
+            </span>
+          )}
+          <span className="text-[11px] font-mono text-[#388BFD] font-medium">
+            {totalElapsedSec}s
+          </span>
+          <button
+            type="button"
+            onClick={onInterruptTurn}
+            className="px-2 py-0.5 rounded-md bg-white/[0.08] hover:bg-rose-500/20 text-[#D1D1D6] hover:text-rose-400 text-[11px] font-medium transition-colors"
+          >
+            {lang === 'zh-CN' ? '停止' : 'Stop'}
+          </button>
+        </div>
+      </div>
+    );
+  };
+
   const renderTurnItem = (turnId: string, item: TurnItem) => {
     const isExpanded =
       expandedItems[item.id] !== undefined
@@ -794,7 +943,11 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
                 <span className="truncate codex-text-primary">{item.command}</span>
               </span>
               <span className="flex items-center gap-2 shrink-0">
-                {item.status !== 'streaming' && (
+                {item.status === 'streaming' ? (
+                  <span className="px-1.5 py-0.2 rounded text-[10px] bg-[#388BFD]/15 text-[#388BFD]">
+                    running...
+                  </span>
+                ) : (
                   <span
                     className={`px-1.5 py-0.2 rounded text-[10px] ${
                       (item.exitCode ?? 0) === 0
@@ -1075,6 +1228,9 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
                   {turn.items.map((item) => renderTurnItem(turn.id, item))}
                 </div>
 
+                {/* Official Live In-Progress Task Execution Status Bar */}
+                {renderLiveTurnActivityBar(turn)}
+
                 {turn.status === 'completed' && thread.changedFiles.length > 0 && (
                   <div className="pt-2">
                     <div className="rounded-xl codex-card border codex-border px-4 py-2.5 flex items-center justify-between">
@@ -1199,9 +1355,16 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
             </div>
           )}
 
-          {/* POPOVER 1: 6-Stop Reasoning Effort Slider Popover */}
+          {/* =================================================================
+              POPOVER 1: 100% Pixel-Accurate Official Codex Reasoning Effort Slider
+              Matches Official Screenshots:
+              - `5D0327A7-A1C6-4E87-BA23-9CDB9EA4BBA4.png` (`极高`)
+              - `F4D978F4-2600-463D-A10C-911D59A02F8F.png` (`Max`)
+              - `3EFE149D-3EC1-4111-8ADB-1DF0F6F45B71.png` (`Ultra` Cosmic Starfield)
+             ================================================================= */}
           {showEffortPopover && !showModelPopover && (
-            <div className="absolute bottom-14 right-8 w-[276px] rounded-[22px] bg-[#262628] border border-white/[0.1] shadow-2xl p-4 z-40 select-none">
+            <div className="absolute bottom-14 right-8 w-[274px] rounded-[24px] bg-[#252527]/95 backdrop-blur-xl border border-white/[0.09] shadow-[0_20px_50px_rgba(0,0,0,0.65)] px-4 pt-3.5 pb-4 z-40 select-none">
+              {/* Top Row: Lightning (`⚡`) | Effort Title (`极高` / `Max` / `Ultra`) | Reset (`↻`) */}
               <div className="flex items-center justify-between">
                 <button
                   type="button"
@@ -1209,12 +1372,16 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
                     onUpdateThreadConfig(thread.id, { reasoningEffort: 'low' }, true)
                   }
                   title="切换至快速轻量推理"
-                  className="text-[#9A9A9E] hover:text-white transition-colors p-0.5"
+                  className="text-[#8E8E93] hover:text-white transition-colors p-0.5"
                 >
-                  <Zap className="w-4 h-4" />
+                  <Zap className="w-[17px] h-[17px]" strokeWidth={1.75} />
                 </button>
 
-                <span className="text-[15px] font-semibold text-[#3B82F6]">
+                <span
+                  className={`text-[15.5px] font-semibold tracking-tight transition-colors ${
+                    isUltraStop ? 'text-[#A78BFA]' : 'text-[#388BFD]'
+                  }`}
+                >
                   {currentEffortLabel}
                 </span>
 
@@ -1224,19 +1391,20 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
                     onUpdateThreadConfig(thread.id, { reasoningEffort: 'xhigh' }, true)
                   }
                   title="重置为默认推理强度 (极高)"
-                  className="text-[#9A9A9E] hover:text-white transition-colors p-0.5"
+                  className="text-[#8E8E93] hover:text-white transition-colors p-0.5"
                 >
-                  <RotateCw className="w-4 h-4" />
+                  <RotateCw className="w-[16px] h-[16px]" strokeWidth={1.75} />
                 </button>
               </div>
 
+              {/* Second Row: `<ModelDisplayName> >` (`GPT-6 Astra >` / `GPT-6.1 Sol >`) */}
               <div className="flex justify-center mt-0.5 mb-3.5">
                 <button
                   type="button"
                   onClick={() => {
                     setShowModelPopover(true);
                   }}
-                  className="inline-flex items-center gap-0.5 text-[13px] text-[#B4B4B8] hover:text-white transition-colors"
+                  className="inline-flex items-center gap-0.5 text-[13.5px] text-[#A1A1A6] hover:text-white transition-colors"
                 >
                   <span>
                     {daybreakEnabled
@@ -1247,54 +1415,113 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
                 </button>
               </div>
 
-              <div className="relative h-8 rounded-full bg-[#3A3A3C] flex items-center px-1.5">
+              {/* Third Row: Official Track (`h-[26px]`) + Oversized Protruding White Thumb (`34px`) */}
+              <div
+                ref={sliderTrackRef}
+                onPointerDown={(e) => {
+                  setIsDraggingSlider(true);
+                  updateEffortFromClientX(e.clientX);
+                }}
+                className="relative h-[34px] flex items-center cursor-pointer select-none"
+              >
+                {/* 26px Pill Track */}
+                <div className="relative w-full h-[26px] rounded-full bg-[#38383C] border border-white/[0.06] overflow-hidden">
+                  {isUltraStop ? (
+                    /* Official `Ultra` Cosmic Nebula Gradient + Starfield (Screenshot `3EFE149D...`) */
+                    <div
+                      style={{
+                        background:
+                          'linear-gradient(90deg, #1E42B8 0%, #375DF5 24%, #6D4AFF 58%, #9055EB 85%, #A66BFF 100%)',
+                      }}
+                      className="absolute inset-0 rounded-full"
+                    >
+                      <svg
+                        viewBox="0 0 240 26"
+                        fill="none"
+                        className="w-full h-full opacity-95 pointer-events-none"
+                        preserveAspectRatio="none"
+                      >
+                        {/* Left constellation cluster */}
+                        <circle cx="21" cy="17.5" r="1.3" fill="#FFFFFF" fillOpacity="0.88" />
+                        <circle cx="24" cy="17.2" r="1.4" fill="#FFFFFF" fillOpacity="0.92" />
+                        <circle cx="32" cy="11.5" r="1.6" fill="#FFFFFF" fillOpacity="0.85" />
+                        <circle cx="46" cy="16.5" r="1.1" fill="#FFFFFF" fillOpacity="0.7" />
+                        {/* Mid-left stars */}
+                        <circle cx="75" cy="17" r="1.5" fill="#FFFFFF" fillOpacity="0.9" />
+                        {/* Center constellation cluster */}
+                        <circle cx="109" cy="16.2" r="1.5" fill="#FFFFFF" fillOpacity="0.9" />
+                        <circle cx="122" cy="11.8" r="1.2" fill="#FFFFFF" fillOpacity="0.8" />
+                        <circle cx="127" cy="13.8" r="1.6" fill="#FFFFFF" fillOpacity="0.95" />
+                        <circle cx="147" cy="16.8" r="1.3" fill="#FFFFFF" fillOpacity="0.78" />
+                        <circle cx="152" cy="19.2" r="1.6" fill="#FFFFFF" fillOpacity="0.92" />
+                        {/* Right bright star with soft glow */}
+                        <circle cx="186" cy="14" r="3.4" fill="#FFFFFF" fillOpacity="0.22" />
+                        <circle cx="186" cy="14" r="2.1" fill="#FFFFFF" fillOpacity="0.95" />
+                        <circle cx="209" cy="13.5" r="1.2" fill="#FFFFFF" fillOpacity="0.65" />
+                      </svg>
+                    </div>
+                  ) : (
+                    /* Standard Solid Blue Fill (`#2E7CF6`) ending cleanly at the center of the active thumb */
+                    <div
+                      style={{
+                        width: `calc(17px + ${activeStopIndex} * ((100% - 34px) / 5))`,
+                      }}
+                      className="absolute left-0 top-0 bottom-0 bg-[#2E7CF6] transition-all duration-150 pointer-events-none"
+                    />
+                  )}
+
+                  {/* 6 Stop Dots inside the 26px track (hidden in `Ultra` starfield mode) */}
+                  {!isUltraStop &&
+                    SLIDER_EFFORT_STOPS.map((stop, idx) => {
+                      const isLeft = idx < activeStopIndex;
+                      return (
+                        <span
+                          key={stop.id}
+                          style={{
+                            left: `calc(17px + ${idx} * ((100% - 34px) / 5))`,
+                          }}
+                          className={`absolute top-1/2 -translate-x-1/2 -translate-y-1/2 w-[4.5px] h-[4.5px] rounded-full pointer-events-none transition-colors ${
+                            isLeft ? 'bg-white/60' : 'bg-white/30'
+                          }`}
+                        />
+                      );
+                    })}
+                </div>
+
+                {/* Clickable Stop Hit Targets */}
+                <div className="absolute inset-0 z-10 flex items-center justify-between px-[3px]">
+                  {SLIDER_EFFORT_STOPS.map((stop) => (
+                    <button
+                      key={stop.id}
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onUpdateThreadConfig(
+                          thread.id,
+                          { reasoningEffort: stop.id },
+                          true
+                        );
+                      }}
+                      title={lang === 'zh-CN' ? stop.labelZh : stop.labelEn}
+                      className="w-8 h-8 rounded-full focus:outline-none"
+                    />
+                  ))}
+                </div>
+
+                {/* Oversized 34px Pure White Circular Thumb (protrudes 4px above & below the 26px track!) */}
                 <div
                   style={{
-                    width: `calc(${
-                      (activeStopIndex / (SLIDER_EFFORT_STOPS.length - 1)) * 100
-                    }% + ${activeStopIndex === 0 ? 28 : 14}px)`,
+                    left: `calc(17px + ${activeStopIndex} * ((100% - 34px) / 5))`,
                   }}
-                  className="absolute left-0 top-0 bottom-0 rounded-full bg-[#2B7FFF] transition-all duration-150 pointer-events-none"
+                  className=" -translate-x-1/2 -translate-y-1/2 absolute top-1/2 z-20 w-[34px] h-[34px] rounded-full bg-white shadow-[0_2px_10px_rgba(0,0,0,0.48)] pointer-events-none transition-all duration-150"
                 />
-
-                <div className="relative z-10 w-full flex items-center justify-between px-1">
-                  {SLIDER_EFFORT_STOPS.map((stop, idx) => {
-                    const isThumb = idx === activeStopIndex;
-                    const isLeftOfThumb = idx < activeStopIndex;
-                    return (
-                      <button
-                        key={stop.id}
-                        type="button"
-                        onClick={() =>
-                          onUpdateThreadConfig(
-                            thread.id,
-                            { reasoningEffort: stop.id },
-                            true
-                          )
-                        }
-                        title={lang === 'zh-CN' ? stop.labelZh : stop.labelEn}
-                        className="w-7 h-7 flex items-center justify-center relative focus:outline-none"
-                      >
-                        {isThumb ? (
-                          <span className="w-7 h-7 rounded-full bg-white shadow-md block transition-transform scale-105" />
-                        ) : (
-                          <span
-                            className={`w-1.5 h-1.5 rounded-full block transition-colors ${
-                              isLeftOfThumb ? 'bg-white/60' : 'bg-white/35'
-                            }`}
-                          />
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
               </div>
             </div>
           )}
 
           {/* POPOVER 2: `Daybreak` + `默认 (推荐模型集)` + `GPT-6.1 Sol` Model Menu */}
           {showModelPopover && (
-            <div className="absolute bottom-14 right-8 w-[248px] rounded-[22px] bg-[#262628] border border-white/[0.1] shadow-2xl py-3 px-2 z-40 select-none">
+            <div className="absolute bottom-14 right-8 w-[248px] rounded-[22px] bg-[#252527]/95 backdrop-blur-xl border border-white/[0.1] shadow-2xl py-3 px-2 z-40 select-none">
               <div className="px-3 py-1 flex items-center justify-between">
                 <span className="text-[14px] font-medium text-white">Daybreak</span>
                 <button
@@ -1335,7 +1562,6 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
                           true
                         );
                         setShowModelPopover(false);
-                        setShowEffortPopover(false);
                       }}
                       className="w-full text-left px-3 py-1.5 rounded-xl hover:bg-white/[0.07] transition-colors flex items-center justify-between gap-2"
                     >
@@ -1698,11 +1924,12 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
                   ? i18n.thread.composerRunningPlaceholder
                   : lang === 'zh-CN'
                   ? '随心输入'
-                  : 'Ask Codex anything...'
+                  : 'Ask anything...'
               }
-              className="w-full bg-transparent text-[14px] codex-text-primary placeholder:text-[#6E6E73] focus:outline-none resize-none leading-relaxed font-sans"
+              className="w-full bg-transparent text-[14px] codex-text-primary placeholder:text-[#6E6E73] focus:outline-none resize-none leading-relaxed"
             />
 
+            {/* Bottom Controls Row of Composer */}
             <div className="flex items-center justify-between gap-2 pt-0.5 select-none">
               <div className="flex items-center gap-3">
                 <button
@@ -1713,8 +1940,8 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
                     setShowEffortPopover(false);
                     setShowModelPopover(false);
                   }}
-                  title={i18n.thread.attachContextTitle}
-                  className="text-[#9A9A9E] hover:text-white transition-colors"
+                  title="附加文件 (@) 或命令 (/)"
+                  className="text-[#8E8E93] hover:text-white transition-colors"
                 >
                   <Plus className="w-4 h-4" />
                 </button>
@@ -1726,11 +1953,9 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
                     setShowEffortPopover(false);
                     setShowModelPopover(false);
                   }}
-                  className={`inline-flex items-center gap-1.5 text-[12.5px] font-medium transition-opacity hover:opacity-85 ${
+                  className={`flex items-center gap-1.5 text-[12px] font-medium transition-opacity hover:opacity-85 ${
                     permMode === 'full-access'
                       ? 'text-[#FF7D45]'
-                      : permMode === 'read-only'
-                      ? 'text-emerald-400'
                       : 'text-[#9A9A9E]'
                   }`}
                 >
@@ -1740,120 +1965,95 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
                       ? lang === 'zh-CN'
                         ? '完全访问'
                         : 'Full access'
-                      : permMode === 'read-only'
+                      : permMode === 'workspace-write'
                       ? lang === 'zh-CN'
-                        ? '只读模式'
-                        : 'Read-only'
+                        ? '默认权限'
+                        : 'Default permissions'
                       : lang === 'zh-CN'
-                      ? '默认权限'
-                      : 'Default'}
+                      ? '只读权限'
+                      : 'Read only'}
                   </span>
                 </button>
               </div>
 
+              {/* Right Controls: Official Trigger Pill (`选择强度 ⌄` when open) + Mic + Waveform/Send/Stop */}
               <div className="flex items-center gap-2.5">
                 <button
                   type="button"
                   onClick={() => {
-                    if (showModelPopover) {
-                      setShowModelPopover(false);
+                    if (showEffortPopover || showModelPopover) {
                       setShowEffortPopover(false);
+                      setShowModelPopover(false);
                     } else {
-                      setShowEffortPopover((v) => !v);
+                      setShowEffortPopover(true);
+                      setShowModelPopover(false);
+                      setShowPermMenu(false);
+                      setShowProjectPicker(false);
                     }
-                    setShowFilePicker(false);
-                    setShowPermMenu(false);
                   }}
-                  className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[12.5px] transition-colors ${
+                  className={`flex items-center gap-1.5 text-[12.5px] transition-all ${
                     showEffortPopover || showModelPopover
-                      ? 'bg-white/[0.08] text-[#B4B4B8]'
-                      : 'text-[#B4B4B8] hover:text-white hover:bg-white/[0.05]'
+                      ? 'px-3.5 py-1 rounded-full bg-white/[0.08] text-[#B4B4B8]'
+                      : 'px-2.5 py-1 rounded-full hover:bg-white/[0.06] text-[#9A9A9E] hover:text-white'
                   }`}
                 >
-                  {showEffortPopover && !showModelPopover ? (
-                    <span className="text-[#9A9A9E]">
-                      {lang === 'zh-CN' ? '选择强度' : 'Select effort'}
-                    </span>
+                  {showEffortPopover || showModelPopover ? (
+                    <>
+                      <span>{lang === 'zh-CN' ? '选择强度' : 'Select effort'}</span>
+                      <ChevronDown className="w-3.5 h-3.5 opacity-80 ml-1" />
+                    </>
                   ) : (
                     <>
-                      <span className="text-white font-medium">
+                      <span className="text-[#D1D1D6] font-medium">
                         {daybreakEnabled
                           ? 'Daybreak'
                           : selectedModelMeta.displayName || 'GPT-6.1 Sol'}
                       </span>
-                      <span className="text-[#8E8E93]">{currentEffortLabel}</span>
+                      <span
+                        className={
+                          isUltraStop
+                            ? 'text-[#A78BFA] font-medium'
+                            : 'text-[#8E8E93]'
+                        }
+                      >
+                        {currentEffortLabel}
+                      </span>
+                      <ChevronDown className="w-3 h-3 opacity-70" />
                     </>
                   )}
-                  <ChevronDown className="w-3.5 h-3.5 text-[#8E8E93]" />
                 </button>
 
                 <button
                   type="button"
-                  onClick={() => {
-                    if (!composerText.trim()) {
-                      setComposerText('检查当前项目代码结构并汇报状态');
-                    }
-                  }}
                   title="语音输入"
-                  className="text-[#9A9A9E] hover:text-white transition-colors p-1"
+                  className="p-1 text-[#8E8E93] hover:text-white transition-colors"
                 >
                   <Mic className="w-4 h-4" />
                 </button>
 
-                {isRunning ? (
+                {isRunning && !composerText.trim() ? (
                   <button
                     type="button"
                     onClick={onInterruptTurn}
                     title={i18n.thread.stopTurn}
-                    className="w-7 h-7 rounded-full bg-white text-black flex items-center justify-center hover:opacity-90 transition-opacity"
+                    className="w-7 h-7 rounded-full bg-white text-black flex items-center justify-center hover:opacity-90 transition-opacity shadow-sm"
                   >
                     <Square className="w-3 h-3 fill-current" />
                   </button>
-                ) : (
+                ) : composerText.trim() ? (
                   <button
                     type="submit"
-                    title={i18n.thread.sendPrompt}
-                    className="w-7 h-7 rounded-full bg-white text-black flex items-center justify-center hover:opacity-90 transition-opacity shadow-sm"
+                    className="w-7 h-7 rounded-full bg-white text-black hover:opacity-90 flex items-center justify-center transition-all shadow-sm"
                   >
-                    {composerText.trim().length > 0 ? (
-                      <ArrowUp className="w-4 h-4 stroke-[2.5]" />
-                    ) : (
-                      <svg
-                        width="14"
-                        height="14"
-                        viewBox="0 0 16 16"
-                        fill="none"
-                        xmlns="http://www.w3.org/2000/svg"
-                      >
-                        <line
-                          x1="3.5"
-                          y1="5"
-                          x2="3.5"
-                          y2="11"
-                          stroke="currentColor"
-                          strokeWidth="1.8"
-                          strokeLinecap="round"
-                        />
-                        <line
-                          x1="8"
-                          y1="2.5"
-                          x2="8"
-                          y2="13.5"
-                          stroke="currentColor"
-                          strokeWidth="1.8"
-                          strokeLinecap="round"
-                        />
-                        <line
-                          x1="12.5"
-                          y1="5"
-                          x2="12.5"
-                          y2="11"
-                          stroke="currentColor"
-                          strokeWidth="1.8"
-                          strokeLinecap="round"
-                        />
-                      </svg>
-                    )}
+                    <ArrowUp className="w-4 h-4 stroke-[2.5]" />
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    title="语音对话模式"
+                    className="w-7 h-7 rounded-full bg-white text-black hover:opacity-90 flex items-center justify-center transition-all shadow-sm"
+                  >
+                    <AudioLines className="w-4 h-4 stroke-[2.2]" />
                   </button>
                 )}
               </div>

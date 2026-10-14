@@ -362,12 +362,15 @@ const MACOS_OBJC_SOURCE = `#import <Cocoa/Cocoa.h>
 @property (strong, nonatomic) WKWebView *webView;
 @property (strong, nonatomic) NSTask *serverTask;
 @property (assign, nonatomic) NSInteger serverPort;
+@property (assign, nonatomic) BOOL isTerminating;
 @end
 
 @implementation AppDelegate
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
     self.serverPort = 4500;
+    self.isTerminating = NO;
+    system("/usr/sbin/lsof -ti:4500 | xargs kill -9 >/dev/null 2>&1 || true");
     [self startEmbeddedNodeServer];
 
     NSRect screenFrame = [[NSScreen mainScreen] visibleFrame];
@@ -444,6 +447,7 @@ const MACOS_OBJC_SOURCE = `#import <Cocoa/Cocoa.h>
 }
 
 - (void)startEmbeddedNodeServer {
+    if (self.isTerminating) return;
     NSString *resourcePath = [[NSBundle mainBundle] resourcePath];
     if (!resourcePath) return;
 
@@ -452,9 +456,6 @@ const MACOS_OBJC_SOURCE = `#import <Cocoa/Cocoa.h>
     NSString *staticDir = [appRoot stringByAppendingPathComponent:@"dist"];
 
     if (![[NSFileManager defaultManager] fileExistsAtPath:serverScript]) return;
-
-    // Clean up any stale server on port 4500 so the packaged app always runs the fresh embedded server
-    system("/usr/sbin/lsof -ti:4500 | xargs kill -9 >/dev/null 2>&1 || true");
 
     NSString *home = NSHomeDirectory();
     NSString *defaultWorkspace = [home stringByAppendingPathComponent:@"Desktop/codex-test"];
@@ -483,6 +484,17 @@ const MACOS_OBJC_SOURCE = `#import <Cocoa/Cocoa.h>
     env[@"PATH"] = [NSString stringWithFormat:@"/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:%@", oldPath];
     [task setEnvironment:env];
 
+    __weak typeof(self) weakSelf = self;
+    [task setTerminationHandler:^(NSTask *terminatedTask) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf || strongSelf.isTerminating) return;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(500 * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{
+            if (!strongSelf.isTerminating) {
+                [strongSelf startEmbeddedNodeServer];
+            }
+        });
+    }];
+
     NSError *err = nil;
     if ([task launchAndReturnError:&err]) {
         self.serverTask = task;
@@ -497,7 +509,10 @@ const MACOS_OBJC_SOURCE = `#import <Cocoa/Cocoa.h>
             if ([httpResp isKindOfClass:[NSHTTPURLResponse class]] && httpResp.statusCode == 200) {
                 dispatch_async(dispatch_get_main_queue(), ^{
                     NSURL *appUrl = [NSURL URLWithString:[NSString stringWithFormat:@"http://127.0.0.1:%ld/", (long)self.serverPort]];
-                    [self.webView loadRequest:[NSURLRequest requestWithURL:appUrl]];
+                    NSURLRequest *req = [NSURLRequest requestWithURL:appUrl
+                                                         cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
+                                                     timeoutInterval:3600.0];
+                    [self.webView loadRequest:req];
                 });
             } else if (attempt < 35) {
                 dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(150 * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{
@@ -523,6 +538,7 @@ const MACOS_OBJC_SOURCE = `#import <Cocoa/Cocoa.h>
 }
 
 - (void)applicationWillTerminate:(NSNotification *)notification {
+    self.isTerminating = YES;
     if (self.serverTask && [self.serverTask isRunning]) {
         [self.serverTask terminate];
     }

@@ -27,7 +27,8 @@ export type ReasoningEffort =
   | 'high'
   | 'xhigh'
   | 'uhigh'
-  | 'max';
+  | 'max'
+  | 'ultra';
 
 export interface CodexReasoningLevelOption {
   effort: ReasoningEffort;

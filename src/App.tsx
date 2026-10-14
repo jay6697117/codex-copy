@@ -154,6 +154,11 @@ export function App() {
       readWorkspaceFile('AGENTS.md', targetCwd),
     ]);
 
+    const effectiveWorkspaces =
+      wsData?.workspaces && wsData.workspaces.length > 0
+        ? wsData.workspaces
+        : projects;
+
     if (wsData?.workspaces && wsData.workspaces.length > 0) {
       setProjects(wsData.workspaces);
     }
@@ -172,45 +177,55 @@ export function App() {
       }
 
       if (Array.isArray(codexStatus.localSessions) && codexStatus.localSessions.length > 0) {
-        const importedThreads: Thread[] = codexStatus.localSessions.map((sess) => ({
-          id: sess.id,
-          cliSessionId: sess.cliSessionId,
-          projectId: INITIAL_PROJECTS[0].id,
-          title: sess.title,
-          pinned: false,
-          isLocalCliSession: true,
-          status: 'completed',
-          worktreeId: 'wt_main',
-          branch: sess.branch || 'main',
-          cwd: sess.cwd,
-          environmentMode: 'local',
-          permissionMode: 'full-access',
-          model: sess.model || codexStatus.config.effective.model || 'gpt-6.1-sol',
-          personality: 'pragmatic',
-          reasoningEffort:
-            (codexStatus.config.effective.reasoningEffort as any) || 'xhigh',
-          subagent: 'default',
-          updatedAt: sess.updatedAt,
-          tokenUsage: 'Local CLI session',
-          diffSummary: { files: 0, additions: 0, deletions: 0 },
-          turns:
-            sess.items.length > 0
-              ? [
-                  {
-                    id: `turn_${sess.id}`,
-                    threadId: sess.id,
-                    status: 'completed',
-                    startedAt: new Date(sess.mtimeMs).toISOString(),
-                    model:
-                      sess.model || codexStatus.config.effective.model || 'gpt-6.1-sol',
-                    personality: 'pragmatic',
-                    reasoningEffort: 'xhigh',
-                    items: sess.items,
-                  },
-                ]
-              : [],
-          changedFiles: [],
-        }));
+        const normPath = (p?: string) => (p || '').trim().replace(/[\\/]+$/, '');
+        const workspaceByPath = new Map(
+          effectiveWorkspaces.map((w) => [normPath(w.repoPath), w])
+        );
+
+        const importedThreads: Thread[] = codexStatus.localSessions
+          .filter((sess) => workspaceByPath.has(normPath(sess.cwd)))
+          .map((sess) => {
+            const matchedProj = workspaceByPath.get(normPath(sess.cwd))!;
+            return {
+              id: sess.id,
+              cliSessionId: sess.cliSessionId,
+              projectId: matchedProj.id,
+              title: sess.title,
+              pinned: false,
+              isLocalCliSession: true,
+              status: 'completed',
+              worktreeId: 'wt_main',
+              branch: sess.branch || 'main',
+              cwd: matchedProj.repoPath,
+              environmentMode: 'local',
+              permissionMode: 'full-access',
+              model: sess.model || codexStatus.config.effective.model || 'gpt-6.1-sol',
+              personality: 'pragmatic',
+              reasoningEffort:
+                (codexStatus.config.effective.reasoningEffort as any) || 'xhigh',
+              subagent: 'default',
+              updatedAt: sess.updatedAt,
+              tokenUsage: 'Local CLI session',
+              diffSummary: { files: 0, additions: 0, deletions: 0 },
+              turns:
+                sess.items.length > 0
+                  ? [
+                      {
+                        id: `turn_${sess.id}`,
+                        threadId: sess.id,
+                        status: 'completed',
+                        startedAt: new Date(sess.mtimeMs).toISOString(),
+                        model:
+                          sess.model || codexStatus.config.effective.model || 'gpt-6.1-sol',
+                        personality: 'pragmatic',
+                        reasoningEffort: 'xhigh',
+                        items: sess.items,
+                      },
+                    ]
+                  : [],
+              changedFiles: [],
+            };
+          });
 
         setThreads((prev) => {
           const activeTitles = new Set(
@@ -219,9 +234,13 @@ export function App() {
               .map((th) => th.title)
           );
           const importedMap = new Map(importedThreads.map((th) => [th.id, th]));
-          const updatedPrev = prev.map((th) =>
-            importedMap.has(th.id) ? importedMap.get(th.id)! : th
-          );
+          const updatedPrev = prev
+            .filter(
+              (th) =>
+                !th.isLocalCliSession ||
+                workspaceByPath.has(normPath(th.cwd))
+            )
+            .map((th) => (importedMap.has(th.id) ? importedMap.get(th.id)! : th));
           const existingIds = new Set(updatedPrev.map((th) => th.id));
           const fresh = importedThreads.filter(
             (th) => !existingIds.has(th.id) && !activeTitles.has(th.title)
@@ -815,6 +834,7 @@ export function App() {
           )
         }
         onOpenWorkspaceModal={() => setIsWorkspaceModalOpen(true)}
+        onRemoveProject={handleRemoveWorkspace}
         threads={threads}
         activeThreadId={activeThread.id}
         onSelectThread={(id) => {
@@ -823,6 +843,15 @@ export function App() {
           if (target?.changedFiles[0]) {
             setSelectedDiffFile(target.changedFiles[0].filePath);
           }
+        }}
+        onDeleteThread={(threadId) => {
+          setThreads((prev) => {
+            const next = prev.filter((th) => th.id !== threadId);
+            if (activeThreadId === threadId && next[0]) {
+              setActiveThreadId(next[0].id);
+            }
+            return next.length > 0 ? next : prev;
+          });
         }}
         onCreateNewThread={handleCreateNewThread}
         onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}

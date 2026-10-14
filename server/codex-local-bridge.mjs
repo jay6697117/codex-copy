@@ -12,6 +12,7 @@ import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import crypto from 'node:crypto';
 import { exec, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import readline from 'node:readline';
@@ -20,6 +21,14 @@ const execAsync = promisify(exec);
 const IS_WIN = process.platform === 'win32';
 
 const activeTurnProcesses = new Map();
+
+export function makeWorkspaceId(normalizedPath) {
+  if (!normalizedPath || typeof normalizedPath !== 'string') return 'proj_codex_desktop';
+  const norm = path.resolve(normalizedPath).replace(/\/+$/, '');
+  if (norm.endsWith('/codex-test')) return 'proj_codex_desktop';
+  const hash = crypto.createHash('sha1').update(norm).digest('hex').slice(0, 12);
+  return `proj_${hash}`;
+}
 
 const INTERNAL_UTILITY_SLUGS = new Set([
   'gpt-reserve',
@@ -65,8 +74,8 @@ const DEFAULT_SUPPORTED_REASONING_LEVELS = [
   { effort: 'medium', description: '平衡响应速度与推理深度' },
   { effort: 'high', description: '深度多步推理，适合复杂工程问题' },
   { effort: 'xhigh', description: '极高推理深度，适合架构重构与疑难分析' },
-  { effort: 'uhigh', description: '超高推理强度，深度探索多维方案' },
-  { effort: 'max', description: '最大思考预算，全面验证长周期任务' },
+  { effort: 'max', description: 'Max 深度单任务极限推理预算' },
+  { effort: 'ultra', description: 'Ultra 多智能体并行协同与全域深度探索' },
 ];
 
 const REAL_CODEX_APP_MODEL_CATALOG = [
@@ -146,7 +155,9 @@ const REAL_CODEX_APP_MODEL_CATALOG = [
 
 function mapEffortToCliValue(effort) {
   if (!effort) return 'xhigh';
-  if (effort === 'uhigh' || effort === 'max' || effort === 'xhigh') return 'xhigh';
+  if (effort === 'ultra' || effort === 'uhigh' || effort === 'max' || effort === 'xhigh') {
+    return 'xhigh';
+  }
   if (effort === 'high' || effort === 'medium' || effort === 'low' || effort === 'minimal') {
     return effort;
   }
@@ -559,9 +570,13 @@ export function markCodexBinaryBroken(binPath) {
 
 // ============================================================================
 // Multi-Workspace / Working Directory Management
+// - Uses `makeWorkspaceId(normalized)` (SHA-1) so every folder has a unique ID
+//   (fixing the bug where paths sharing `/Users/zhangjinhui/...` had the same 18-char base64 prefix).
+// - Only displays workspaces explicitly created or opened in this Desktop App
+//   (`~/.codex/codex_desktop_app_workspaces_v2.json`), NEVER dumping 20+ old CLI folders from config.toml.
 // ============================================================================
 function getWorkspacesStorePath() {
-  return path.join(resolveCodexHomeDir(), 'desktop_workspaces.json');
+  return path.join(resolveCodexHomeDir(), 'codex_desktop_app_workspaces_v2.json');
 }
 
 export async function listDirectorySubfolders(targetDir) {
@@ -598,7 +613,6 @@ export async function listDirectorySubfolders(targetDir) {
 
 export async function listAllWorkspaces(defaultWorkspaceRoot) {
   const realHome = resolveRealHomeDir();
-  const codexHome = resolveCodexHomeDir();
   const storePath = getWorkspacesStorePath();
 
   const workspaceMap = new Map();
@@ -606,12 +620,12 @@ export async function listAllWorkspaces(defaultWorkspaceRoot) {
   const addWorkspaceEntry = (repoPath, expanded = true) => {
     if (!repoPath || typeof repoPath !== 'string') return;
     if (repoPath.includes('.app/Contents/Resources')) return;
-    const normalized = path.resolve(repoPath);
+    const normalized = path.resolve(repoPath).replace(/\/+$/, '');
     if (!fsSync.existsSync(normalized)) return;
-    const id = `proj_${Buffer.from(normalized).toString('base64url').slice(0, 18)}`;
+    const id = makeWorkspaceId(normalized);
     if (!workspaceMap.has(normalized)) {
       workspaceMap.set(normalized, {
-        id: normalized.endsWith('/codex-test') ? 'proj_codex_desktop' : id,
+        id,
         name: path.basename(normalized) || normalized,
         repoPath: normalized,
         defaultBranch: 'main',
@@ -628,11 +642,13 @@ export async function listAllWorkspaces(defaultWorkspaceRoot) {
     addWorkspaceEntry(defaultWorkspaceRoot, true);
   }
 
-  // 2. Saved workspaces in `~/.codex/desktop_workspaces.json`
+  // 2. Saved workspaces explicitly created/added in this Desktop App (`~/.codex/codex_desktop_app_workspaces_v2.json`)
+  let loadedStore = false;
   try {
     const raw = await fs.readFile(storePath, 'utf8');
     const savedList = JSON.parse(raw);
     if (Array.isArray(savedList)) {
+      loadedStore = true;
       for (const item of savedList) {
         addWorkspaceEntry(typeof item === 'string' ? item : item?.repoPath, true);
       }
@@ -641,18 +657,16 @@ export async function listAllWorkspaces(defaultWorkspaceRoot) {
     // ignore
   }
 
-  // 3. Projects registered in `~/.codex/config.toml` (`[projects."/path"]`)
-  try {
-    const configRaw = await fs.readFile(path.join(codexHome, 'config.toml'), 'utf8');
-    const parsed = parseTomlConfig(configRaw);
-    for (const projPath of Object.keys(parsed.projects || {})) {
-      addWorkspaceEntry(projPath, false);
+  // Migrate any user-created workspace from v1 store only if it is under ~/Desktop (such as my-g4-app),
+  // NEVER importing random historical CLI directories from config.toml!
+  if (!loadedStore) {
+    const myG4App = path.join(realHome, 'Desktop', 'my-g4-app');
+    if (fsSync.existsSync(myG4App)) {
+      addWorkspaceEntry(myG4App, true);
     }
-  } catch {
-    // ignore
   }
 
-  // 4. Discover Desktop subfolders for quick one-click import
+  // 3. Discover Desktop subfolders for the modal's quick one-click import list
   const desktopSubfolders = await listDirectorySubfolders(path.join(realHome, 'Desktop'));
 
   return {
@@ -718,13 +732,11 @@ export async function createOrAddWorkspace({
     }
   }
 
-  // Add to saved workspaces store
+  // Add to saved workspaces store with collision-free SHA-1 ID
   const current = await listAllWorkspaces(targetPath);
   const existing = current.workspaces;
-  const normalized = path.resolve(targetPath);
-  const id = normalized.endsWith('/codex-test')
-    ? 'proj_codex_desktop'
-    : `proj_${Buffer.from(normalized).toString('base64url').slice(0, 18)}`;
+  const normalized = path.resolve(targetPath).replace(/\/+$/, '');
+  const id = makeWorkspaceId(normalized);
 
   const newWorkspace = {
     id,
@@ -1296,7 +1308,13 @@ async function scanLocalCodexSessions(codexHome, fallbackModel = 'gpt-6.1-sol') 
   const seenSessionIds = new Set();
   const seenTitles = new Set();
   const sessionsDir = path.join(codexHome, 'sessions');
-  const { titleMap, orderedEntries } = await loadHistoryEntries(codexHome);
+  const { titleMap } = await loadHistoryEntries(codexHome);
+
+  // Only include sessions whose `cwd` belongs to a workspace explicitly used/registered in this Desktop App
+  const wsData = await listAllWorkspaces();
+  const allowedWorkspacePaths = new Set(
+    (wsData.workspaces || []).map((w) => path.resolve(w.repoPath).replace(/\/+$/, ''))
+  );
 
   async function walkSessionFiles(dir, depth = 0) {
     if (depth > 4) return [];
@@ -1326,7 +1344,7 @@ async function scanLocalCodexSessions(codexHome, fallbackModel = 'gpt-6.1-sol') 
 
   const rolloutFiles = (await walkSessionFiles(sessionsDir))
     .sort((a, b) => b.mtimeMs - a.mtimeMs)
-    .slice(0, 30);
+    .slice(0, 24);
 
   for (const fileInfo of rolloutFiles) {
     try {
@@ -1400,6 +1418,12 @@ async function scanLocalCodexSessions(codexHome, fallbackModel = 'gpt-6.1-sol') 
         }
       }
 
+      if (!cwd) continue;
+      const normalizedCwd = path.resolve(cwd).replace(/\/+$/, '');
+      if (!allowedWorkspacePaths.has(normalizedCwd)) {
+        continue;
+      }
+
       const firstUserItem = currentTurnItems.find((i) => i.type === 'userMessage');
       const historyTitle = titleMap.get(sessionId);
       const title =
@@ -1414,8 +1438,8 @@ async function scanLocalCodexSessions(codexHome, fallbackModel = 'gpt-6.1-sol') 
         id: `local_${sessionId}`,
         cliSessionId: sessionId,
         title,
-        cwd: cwd || resolveRealHomeDir(),
-        projectName: cwd ? path.basename(cwd) : 'codex-test',
+        cwd: normalizedCwd,
+        projectName: path.basename(normalizedCwd) || 'codex-test',
         branch,
         model: model || fallbackModel,
         updatedAt: new Date(fileInfo.mtimeMs).toLocaleTimeString([], {
@@ -1430,36 +1454,7 @@ async function scanLocalCodexSessions(codexHome, fallbackModel = 'gpt-6.1-sol') 
     }
   }
 
-  for (const h of orderedEntries) {
-    if (seenSessionIds.has(h.sessionId) || seenTitles.has(h.title)) continue;
-    seenSessionIds.add(h.sessionId);
-    seenTitles.add(h.title);
-    sessions.push({
-      id: `local_${h.sessionId}`,
-      cliSessionId: h.sessionId,
-      title: h.title,
-      cwd: resolveRealHomeDir(),
-      projectName: 'codex-test',
-      branch: 'main',
-      model: fallbackModel,
-      updatedAt: new Date(h.tsMs).toLocaleTimeString([], {
-        hour: '2-digit',
-        minute: '2-digit',
-      }),
-      mtimeMs: h.tsMs,
-      items: [
-        {
-          id: 'item_0',
-          type: 'userMessage',
-          status: 'completed',
-          timestamp: new Date(h.tsMs).toTimeString().split(' ')[0],
-          text: h.text,
-        },
-      ],
-    });
-  }
-
-  return sessions.slice(0, 24);
+  return sessions.slice(0, 12);
 }
 
 async function scanLocalCodexSkills(codexHome, workspaceRoot) {
@@ -1704,6 +1699,68 @@ export async function inspectGitRepository(cwd) {
  * and `RUST_LOG=off` so internal Rust tracing errors (`codex_rmcp_client`, `codex_models_manager`)
  * never pollute stderr or the user's Reasoning UI.
  */
+const activeTurnSessions = new Map();
+const activeThreadTurnKeyMap = new Map();
+
+function cleanupExpiredTurnSessions() {
+  const now = Date.now();
+  for (const [key, session] of activeTurnSessions.entries()) {
+    if (session.status !== 'running' && session.finishedAt && now - session.finishedAt > 15 * 60 * 1000) {
+      activeTurnSessions.delete(key);
+    }
+  }
+}
+
+function killChildProcessSafely(proc) {
+  if (!proc) return;
+  try {
+    if (IS_WIN && proc.pid) {
+      exec(`taskkill /pid ${proc.pid} /T /F`, () => {});
+    } else {
+      proc.kill('SIGTERM');
+      setTimeout(() => {
+        try {
+          if (!proc.killed) proc.kill('SIGKILL');
+        } catch {
+          // ignore
+        }
+      }, 800);
+    }
+  } catch {
+    // ignore
+  }
+}
+
+export function getActiveTurnStatus(turnIdOrThreadId, sinceSeq = 0) {
+  cleanupExpiredTurnSessions();
+  const resolvedKey =
+    activeTurnSessions.has(turnIdOrThreadId)
+      ? turnIdOrThreadId
+      : activeThreadTurnKeyMap.get(turnIdOrThreadId) || turnIdOrThreadId;
+  const session = activeTurnSessions.get(resolvedKey);
+  if (!session) {
+    return {
+      ok: true,
+      found: false,
+      status: 'not_found',
+      events: [],
+      lastSeq: 0,
+    };
+  }
+  const minSeq = Number(sinceSeq) || 0;
+  const missedEvents = session.events.filter((e) => e._seq > minSeq);
+  return {
+    ok: true,
+    found: true,
+    turnKey: session.turnKey,
+    threadId: session.threadId,
+    status: session.status,
+    elapsedSec: Math.max(1, Math.round((Date.now() - session.startedAt) / 1000)),
+    lastSeq: session.seq,
+    events: missedEvents,
+  };
+}
+
 async function runCodexCliProcess({
   codexBin,
   args,
@@ -1731,6 +1788,11 @@ async function runCodexCliProcess({
     stdio: ['pipe', 'pipe', 'pipe'],
   });
 
+  // Prevent unhandled EPIPE / ECONNRESET stream errors from crashing the bridge server
+  child.stdin?.on('error', () => {});
+  child.stdout?.on('error', () => {});
+  child.stderr?.on('error', () => {});
+
   activeTurnProcesses.set(turnKey, child);
 
   try {
@@ -1743,52 +1805,88 @@ async function runCodexCliProcess({
   let receivedAgentMessage = false;
   let receivedTurnFailed = null;
   let stderrBuffer = '';
+  let postCompletionTimer = null;
+  let settled = false;
 
   const rl = readline.createInterface({ input: child.stdout });
-  rl.on('line', (line) => {
-    const trimmed = line.trim();
-    if (!trimmed) return;
-    try {
-      const parsed = JSON.parse(trimmed);
-      if (
-        (parsed.type === 'item.completed' || parsed.type === 'item.updated') &&
-        parsed.item?.type === 'agent_message' &&
-        parsed.item?.text
-      ) {
-        receivedAgentMessage = true;
-      }
-      if (parsed.type === 'turn.failed' && parsed.error?.message) {
-        receivedTurnFailed = parsed.error.message;
-      }
-      onJsonEvent(parsed);
-    } catch {
-      const cleanLine = stripAnsi(trimmed);
-      if (
-        cleanLine &&
-        !/^\d{4}-\d{2}-\d{2}T/.test(cleanLine) &&
-        !/\b(ERROR|WARN|INFO|DEBUG)\b\s+codex_/.test(cleanLine)
-      ) {
-        onJsonEvent({
-          type: 'stdout.line',
-          text: cleanLine,
-        });
-      }
-    }
-  });
-
-  child.stderr.on('data', (chunk) => {
-    stderrBuffer += stripAnsi(chunk.toString());
-  });
 
   const exitCode = await new Promise((resolve) => {
-    child.on('close', (code) => {
+    const finishOnce = (code) => {
+      if (settled) return;
+      settled = true;
+      if (postCompletionTimer) {
+        clearTimeout(postCompletionTimer);
+        postCompletionTimer = null;
+      }
       activeTurnProcesses.delete(turnKey);
+      try {
+        rl.close();
+      } catch {
+        // ignore
+      }
       resolve(code ?? 0);
+    };
+
+    rl.on('line', (line) => {
+      const trimmed = line.trim();
+      if (!trimmed) return;
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (
+          (parsed.type === 'item.completed' || parsed.type === 'item.updated') &&
+          parsed.item?.type === 'agent_message' &&
+          parsed.item?.text
+        ) {
+          receivedAgentMessage = true;
+        }
+        if (parsed.type === 'turn.failed' && parsed.error?.message) {
+          receivedTurnFailed = parsed.error.message;
+        }
+        onJsonEvent(parsed);
+
+        // Critical fix for grandchild pipe hang:
+        // If `codex` spawned a background server (e.g. `vite` / `node` during verification) that
+        // inherited stdout/stderr pipes, `child.on('close')` would otherwise hang forever even
+        // after `turn.completed` is emitted. Give trailing lines 600ms to flush, then detach & finish!
+        if (parsed.type === 'turn.completed' || parsed.type === 'turn.failed') {
+          if (!postCompletionTimer) {
+            postCompletionTimer = setTimeout(() => {
+              try {
+                child.stdout?.destroy();
+                child.stderr?.destroy();
+              } catch {
+                // ignore
+              }
+              killChildProcessSafely(child);
+              finishOnce(parsed.type === 'turn.failed' ? 1 : 0);
+            }, 600);
+          }
+        }
+      } catch {
+        const cleanLine = stripAnsi(trimmed);
+        if (
+          cleanLine &&
+          !/^\d{4}-\d{2}-\d{2}T/.test(cleanLine) &&
+          !/\b(ERROR|WARN|INFO|DEBUG)\b\s+codex_/.test(cleanLine)
+        ) {
+          onJsonEvent({
+            type: 'stdout.line',
+            text: cleanLine,
+          });
+        }
+      }
+    });
+
+    child.stderr.on('data', (chunk) => {
+      stderrBuffer += stripAnsi(chunk.toString());
+    });
+
+    child.on('close', (code) => {
+      finishOnce(code ?? 0);
     });
     child.on('error', (err) => {
-      activeTurnProcesses.delete(turnKey);
       stderrBuffer += `\n${String(err.message || err)}`;
-      resolve(1);
+      finishOnce(1);
     });
   });
 
@@ -1912,13 +2010,17 @@ async function executeLocalWorkspaceAgentFallback({
 
 /**
  * Stream a real turn via local `codex exec --json -` with:
- * 1. Fresh `models_cache.json` (`touchModelsCacheFreshness`) -> 0ms model cache hit, no 30s timeout!
- * 2. Broken OAuth MCP servers isolated (`-c mcp_servers={}`) -> no `cloudflare-api` `invalid_grant` error!
- * 3. `RUST_LOG=off` and zero stderr/synthetic pollution in `reasoningSteps`!
+ * 1. Immediate `200 OK` header flush + `bridge.connected` handshake + 2s `bridge.heartbeat` keep-alive frames
+ * 2. Stateful `activeTurnSessions` event buffer + multi-subscriber attachment so mid-turn stream drops
+ *    (`TypeError: Load failed` in WebKit) seamlessly resume from `sinceSeq` without losing progress or re-spawning CLI!
+ * 3. Fresh `models_cache.json` (`touchModelsCacheFreshness`) -> 0ms model cache hit, no 30s timeout!
+ * 4. Broken OAuth MCP servers isolated (`-c mcp_servers={}`) -> no `cloudflare-api` `invalid_grant` error!
  */
-export async function streamLocalCodexTurn(reqBody, res) {
+export async function streamLocalCodexTurn(reqBody, res, req) {
+  cleanupExpiredTurnSessions();
+
   const {
-    threadId,
+    threadId = 'thr_default',
     cliSessionId,
     turnId,
     prompt,
@@ -1931,166 +2033,275 @@ export async function streamLocalCodexTurn(reqBody, res) {
     cwd,
     mode = 'agent',
     activeGoal = null,
-  } = reqBody;
+    sinceSeq = 0,
+    resumeStream = false,
+  } = reqBody || {};
+
+  const turnKey = turnId || threadId || `turn_${Date.now().toString(36)}`;
+
+  req?.setTimeout?.(0);
+  res.setTimeout?.(0);
+  res.socket?.setTimeout?.(0);
+  res.socket?.setNoDelay?.(true);
+  res.socket?.setKeepAlive?.(true, 15000);
 
   res.writeHead(200, {
     'Content-Type': 'application/x-ndjson; charset=utf-8',
     'Cache-Control': 'no-cache, no-transform',
     Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
     'Access-Control-Allow-Origin': '*',
   });
+  res.flushHeaders?.();
 
-  const emitEvent = (evt) => {
+  const writeLineToRes = (targetRes, obj) => {
     try {
-      res.write(`${JSON.stringify(evt)}\n`);
+      if (!targetRes.writableEnded && !targetRes.destroyed) {
+        targetRes.write(`${JSON.stringify(obj)}\n`);
+      }
     } catch {
-      // client closed
+      // ignore closed socket write
     }
   };
 
-  const realHome = resolveRealHomeDir();
-  const codexHome = resolveCodexHomeDir();
-  const augPath = buildAugmentedPath();
+  // Immediately flush initial frame so WebKit `fetch()` resolves headers & stream body without waiting for binary probing
+  writeLineToRes(res, {
+    type: 'bridge.connected',
+    turnId: turnKey,
+    ts: Date.now(),
+  });
 
-  // 1. Pre-warm ~/.codex/models_cache.json timestamp so `codex_models_manager` never times out
-  await touchModelsCacheFreshness(codexHome);
-
-  let codexBin = await resolveCodexBinary();
-
-  let targetCwd = cwd && fsSync.existsSync(cwd) ? cwd : process.cwd();
-  if (targetCwd.includes('.app/Contents/Resources')) {
-    const defaultRepo = path.join(realHome, 'Desktop', 'codex-test');
-    targetCwd = fsSync.existsSync(defaultRepo) ? defaultRepo : realHome;
-  }
-
-  let configDefaultModel = 'gpt-6.1-sol';
-  try {
-    const rawGlobal = await fs.readFile(path.join(codexHome, 'config.toml'), 'utf8');
-    const parsedGlobal = parseTomlConfig(rawGlobal);
-    if (parsedGlobal.model && !INTERNAL_UTILITY_SLUGS.has(parsedGlobal.model)) {
-      configDefaultModel = parsedGlobal.model;
+  // Case 1: Reconnecting / Resuming an already running or recently completed turn
+  const existingSession = activeTurnSessions.get(turnKey);
+  if (existingSession) {
+    const minSeq = Number(sinceSeq) || 0;
+    for (const bufferedEvt of existingSession.events) {
+      if (bufferedEvt._seq > minSeq) {
+        writeLineToRes(res, bufferedEvt);
+      }
     }
-  } catch {
-    // ignore
-  }
 
-  let composedPrompt = prompt || '';
-  if (mode === 'goal' || activeGoal) {
-    const goalText = activeGoal || prompt;
-    composedPrompt = `[Persistent Goal (/goal): ${goalText}]\n[Instruction: Pursue this objective systematically. Inspect files, apply necessary edits, run verification commands, and report progress clearly.]\n\n${composedPrompt}`;
-  } else if (mode === 'review') {
-    composedPrompt = `[Code Review Mode (/review): Inspect the current uncommitted git diff for bugs, regressions, security risks, and missing tests.]\n\n${composedPrompt}`;
-  }
-  if (invokedSkills.length > 0) {
-    composedPrompt = `Use skills: ${invokedSkills.map((s) => `$${s}`).join(', ')}\n${composedPrompt}`;
-  }
-  if (attachedFiles.length > 0) {
-    composedPrompt = `Context files: ${attachedFiles.map((f) => `@${f}`).join(', ')}\n${composedPrompt}`;
-  }
-
-  if (codexBin) {
-    const cliEffort = mapEffortToCliValue(reasoningEffort);
-    const effectiveRequestedModel = daybreakEnabled
-      ? 'gpt-daybreak-blue-latest'
-      : model && model !== 'default'
-      ? model
-      : configDefaultModel;
-
-    const wantsMcp = /mcp|cloudflare/i.test(composedPrompt);
-
-    const buildExecArgs = ({
-      useResume,
-      passModelOverride,
-      passConfigOverrides,
-      useBypassSandbox,
-      useFullAuto,
-      isolateMcp,
-    }) => {
-      if (useResume && cliSessionId) {
-        const resumeArgs = ['exec', 'resume', cliSessionId, '--json'];
-        if (useBypassSandbox) {
-          resumeArgs.push('--dangerously-bypass-approvals-and-sandbox');
-        } else if (useFullAuto) {
-          resumeArgs.push('--full-auto');
-        }
-        if (passModelOverride && effectiveRequestedModel && model !== 'default') {
-          resumeArgs.push('-m', effectiveRequestedModel);
-        }
-        if (passConfigOverrides) {
-          resumeArgs.push('-c', `model_reasoning_effort="${cliEffort}"`);
-        }
-        if (isolateMcp) {
-          resumeArgs.push('-c', 'mcp_servers={}');
-        }
-        resumeArgs.push('-');
-        return resumeArgs;
+    if (existingSession.status !== 'running') {
+      writeLineToRes(res, {
+        type: 'stream.done',
+        _seq: existingSession.seq,
+        _turnId: turnKey,
+      });
+      try {
+        res.end();
+      } catch {
+        // ignore
       }
+      return;
+    }
 
-      const freshArgs = ['exec', '--json', '--skip-git-repo-check', '-C', targetCwd];
-      if (mode === 'review' || sandboxMode === 'read-only') {
-        freshArgs.push('-s', 'read-only');
-      } else if (useBypassSandbox) {
-        freshArgs.push('--dangerously-bypass-approvals-and-sandbox');
-      } else if (useFullAuto) {
-        freshArgs.push('--full-auto');
-      } else {
-        freshArgs.push('-s', 'workspace-write');
-      }
-
-      if (passModelOverride && effectiveRequestedModel && model !== 'default') {
-        freshArgs.push('-m', effectiveRequestedModel);
-      }
-      if (passConfigOverrides) {
-        freshArgs.push('-c', `model_reasoning_effort="${cliEffort}"`);
-      }
-      if (isolateMcp) {
-        freshArgs.push('-c', 'mcp_servers={}');
-      }
-      freshArgs.push('-');
-      return freshArgs;
+    // Attach this reconnected response stream to the active turn session
+    existingSession.subscribers.add(res);
+    const detach = () => {
+      existingSession.subscribers.delete(res);
     };
+    res.on('close', detach);
+    req?.on?.('close', detach);
 
-    const isFullAccess =
-      sandboxMode === 'full-access' || sandboxMode === 'danger-full-access';
+    if (existingSession.executionPromise) {
+      await existingSession.executionPromise;
+    }
+    return;
+  }
 
-    const primaryArgs = buildExecArgs({
-      useResume: Boolean(cliSessionId),
-      passModelOverride: model !== 'default',
-      passConfigOverrides: true,
-      useBypassSandbox: isFullAccess,
-      useFullAuto: !isFullAccess,
-      isolateMcp: !wantsMcp,
-    });
+  // If the client explicitly requested only to resume a stream that no longer exists, finish cleanly
+  if (resumeStream && (!prompt || !String(prompt).trim())) {
+    writeLineToRes(res, { type: 'stream.done', resumedEmpty: true });
+    try {
+      res.end();
+    } catch {
+      // ignore
+    }
+    return;
+  }
 
-    const forwardJsonEvent = (parsed) => {
-      if (parsed.type === 'turn.failed') return;
-      emitEvent(parsed);
+  // Clean up any stale orphan process from an earlier turn on the same threadId
+  const prevThreadTurnKey = activeThreadTurnKeyMap.get(threadId);
+  if (prevThreadTurnKey && prevThreadTurnKey !== turnKey) {
+    const staleProc = activeTurnProcesses.get(prevThreadTurnKey);
+    if (staleProc) {
+      killChildProcessSafely(staleProc);
+      activeTurnProcesses.delete(prevThreadTurnKey);
+    }
+  }
+  activeThreadTurnKeyMap.set(threadId, turnKey);
+
+  // Create stateful turn session so background execution survives any transient HTTP stream drop
+  const turnSession = {
+    turnKey,
+    threadId,
+    status: 'running',
+    startedAt: Date.now(),
+    finishedAt: null,
+    seq: 0,
+    events: [],
+    subscribers: new Set([res]),
+    heartbeatTimer: null,
+    executionPromise: null,
+  };
+  activeTurnSessions.set(turnKey, turnSession);
+
+  const detachInitial = () => {
+    turnSession.subscribers.delete(res);
+  };
+  res.on('close', detachInitial);
+  req?.on?.('close', detachInitial);
+
+  const emitEvent = (evt) => {
+    if (!evt) return;
+    if (evt.type === 'bridge.heartbeat' || evt.type === 'bridge.connected') {
+      for (const sub of turnSession.subscribers) {
+        writeLineToRes(sub, evt);
+      }
+      return;
+    }
+    const stamped = {
+      ...evt,
+      _seq: ++turnSession.seq,
+      _turnId: turnKey,
     };
+    turnSession.events.push(stamped);
+    for (const sub of turnSession.subscribers) {
+      writeLineToRes(sub, stamped);
+    }
+  };
 
-    const turnKey = turnId || threadId;
-
-    // Stage 1: Fast primary execution (with fresh models_cache.json + isolated broken OAuth MCP)
-    let result = await runCodexCliProcess({
-      codexBin,
-      args: primaryArgs,
-      promptText: composedPrompt,
-      targetCwd,
-      realHome,
-      augPath,
-      turnKey,
-      onJsonEvent: forwardJsonEvent,
+  turnSession.heartbeatTimer = setInterval(() => {
+    emitEvent({
+      type: 'bridge.heartbeat',
+      turnId: turnKey,
+      elapsedSec: Math.max(1, Math.round((Date.now() - turnSession.startedAt) / 1000)),
     });
+  }, 2000);
 
-    // Stage 1b: Binary self-healing failover if ENOENT occurred
-    if (
-      !result.receivedAgentMessage &&
-      /ENOENT|Error: spawn/i.test(result.stderrBuffer || '')
-    ) {
-      markCodexBinaryBroken(codexBin);
-      const alternateBin = await resolveCodexBinary(true);
-      if (alternateBin && alternateBin !== codexBin) {
-        codexBin = alternateBin;
-        result = await runCodexCliProcess({
+  const executeWorkflow = async () => {
+    try {
+      const realHome = resolveRealHomeDir();
+      const codexHome = resolveCodexHomeDir();
+      const augPath = buildAugmentedPath();
+
+      // 1. Pre-warm ~/.codex/models_cache.json timestamp so `codex_models_manager` never times out
+      await touchModelsCacheFreshness(codexHome);
+
+      let codexBin = await resolveCodexBinary();
+
+      let targetCwd = cwd && fsSync.existsSync(cwd) ? cwd : process.cwd();
+      if (targetCwd.includes('.app/Contents/Resources')) {
+        const defaultRepo = path.join(realHome, 'Desktop', 'codex-test');
+        targetCwd = fsSync.existsSync(defaultRepo) ? defaultRepo : realHome;
+      }
+
+      let configDefaultModel = 'gpt-6.1-sol';
+      try {
+        const rawGlobal = await fs.readFile(path.join(codexHome, 'config.toml'), 'utf8');
+        const parsedGlobal = parseTomlConfig(rawGlobal);
+        if (parsedGlobal.model && !INTERNAL_UTILITY_SLUGS.has(parsedGlobal.model)) {
+          configDefaultModel = parsedGlobal.model;
+        }
+      } catch {
+        // ignore
+      }
+
+      let composedPrompt = prompt || '';
+      if (mode === 'goal' || activeGoal) {
+        const goalText = activeGoal || prompt;
+        composedPrompt = `[Persistent Goal (/goal): ${goalText}]\n[Instruction: Pursue this objective systematically. Inspect files, apply necessary edits, run verification commands, and report progress clearly.]\n\n${composedPrompt}`;
+      } else if (mode === 'review') {
+        composedPrompt = `[Code Review Mode (/review): Inspect the current uncommitted git diff for bugs, regressions, security risks, and missing tests.]\n\n${composedPrompt}`;
+      }
+      if (invokedSkills.length > 0) {
+        composedPrompt = `Use skills: ${invokedSkills.map((s) => `$${s}`).join(', ')}\n${composedPrompt}`;
+      }
+      if (attachedFiles.length > 0) {
+        composedPrompt = `Context files: ${attachedFiles.map((f) => `@${f}`).join(', ')}\n${composedPrompt}`;
+      }
+
+      if (codexBin) {
+        const cliEffort = mapEffortToCliValue(reasoningEffort);
+        const effectiveRequestedModel = daybreakEnabled
+          ? 'gpt-daybreak-blue-latest'
+          : model && model !== 'default'
+          ? model
+          : configDefaultModel;
+
+        const wantsMcp = /mcp|cloudflare/i.test(composedPrompt);
+
+        const buildExecArgs = ({
+          useResume,
+          passModelOverride,
+          passConfigOverrides,
+          useBypassSandbox,
+          useFullAuto,
+          isolateMcp,
+        }) => {
+          if (useResume && cliSessionId) {
+            const resumeArgs = ['exec', 'resume', cliSessionId, '--json'];
+            if (useBypassSandbox) {
+              resumeArgs.push('--dangerously-bypass-approvals-and-sandbox');
+            } else if (useFullAuto) {
+              resumeArgs.push('--full-auto');
+            }
+            if (passModelOverride && effectiveRequestedModel && model !== 'default') {
+              resumeArgs.push('-m', effectiveRequestedModel);
+            }
+            if (passConfigOverrides) {
+              resumeArgs.push('-c', `model_reasoning_effort="${cliEffort}"`);
+            }
+            if (isolateMcp) {
+              resumeArgs.push('-c', 'mcp_servers={}');
+            }
+            resumeArgs.push('-');
+            return resumeArgs;
+          }
+
+          const freshArgs = ['exec', '--json', '--skip-git-repo-check', '-C', targetCwd];
+          if (mode === 'review' || sandboxMode === 'read-only') {
+            freshArgs.push('-s', 'read-only');
+          } else if (useBypassSandbox) {
+            freshArgs.push('--dangerously-bypass-approvals-and-sandbox');
+          } else if (useFullAuto) {
+            freshArgs.push('--full-auto');
+          } else {
+            freshArgs.push('-s', 'workspace-write');
+          }
+
+          if (passModelOverride && effectiveRequestedModel && model !== 'default') {
+            freshArgs.push('-m', effectiveRequestedModel);
+          }
+          if (passConfigOverrides) {
+            freshArgs.push('-c', `model_reasoning_effort="${cliEffort}"`);
+          }
+          if (isolateMcp) {
+            freshArgs.push('-c', 'mcp_servers={}');
+          }
+          freshArgs.push('-');
+          return freshArgs;
+        };
+
+        const isFullAccess =
+          sandboxMode === 'full-access' || sandboxMode === 'danger-full-access';
+
+        const primaryArgs = buildExecArgs({
+          useResume: Boolean(cliSessionId),
+          passModelOverride: model !== 'default',
+          passConfigOverrides: true,
+          useBypassSandbox: isFullAccess,
+          useFullAuto: !isFullAccess,
+          isolateMcp: !wantsMcp,
+        });
+
+        const forwardJsonEvent = (parsed) => {
+          if (parsed.type === 'turn.failed') return;
+          emitEvent(parsed);
+        };
+
+        // Stage 1: Fast primary execution (with fresh models_cache.json + isolated broken OAuth MCP)
+        let result = await runCodexCliProcess({
           codexBin,
           args: primaryArgs,
           promptText: composedPrompt,
@@ -2100,100 +2311,146 @@ export async function streamLocalCodexTurn(reqBody, res) {
           turnKey,
           onJsonEvent: forwardJsonEvent,
         });
+
+        // Stage 1b: Binary self-healing failover if ENOENT occurred
+        if (
+          !result.receivedAgentMessage &&
+          /ENOENT|Error: spawn/i.test(result.stderrBuffer || '')
+        ) {
+          markCodexBinaryBroken(codexBin);
+          const alternateBin = await resolveCodexBinary(true);
+          if (alternateBin && alternateBin !== codexBin) {
+            codexBin = alternateBin;
+            result = await runCodexCliProcess({
+              codexBin,
+              args: primaryArgs,
+              promptText: composedPrompt,
+              targetCwd,
+              realHome,
+              augPath,
+              turnKey,
+              onJsonEvent: forwardJsonEvent,
+            });
+          }
+        }
+
+        // Stage 2: Retry using `--full-auto` and native ~/.codex/config.toml model defaults
+        if (
+          (result.exitCode !== 0 || result.receivedTurnFailed) &&
+          !result.receivedAgentMessage &&
+          turnSession.status === 'running'
+        ) {
+          const fallbackArgs = buildExecArgs({
+            useResume: false,
+            passModelOverride: false,
+            passConfigOverrides: false,
+            useBypassSandbox: isFullAccess,
+            useFullAuto: !isFullAccess,
+            isolateMcp: !wantsMcp,
+          });
+
+          result = await runCodexCliProcess({
+            codexBin,
+            args: fallbackArgs,
+            promptText: composedPrompt,
+            targetCwd,
+            realHome,
+            augPath,
+            turnKey,
+            onJsonEvent: forwardJsonEvent,
+          });
+        }
+
+        // Stage 3: Bare `codex exec` retry
+        if (
+          (result.exitCode !== 0 || result.receivedTurnFailed) &&
+          !result.receivedAgentMessage &&
+          turnSession.status === 'running'
+        ) {
+          result = await runCodexCliProcess({
+            codexBin,
+            args: ['exec', '--json', '--skip-git-repo-check', '-C', targetCwd, '-'],
+            promptText: composedPrompt,
+            targetCwd,
+            realHome,
+            augPath,
+            turnKey,
+            onJsonEvent: forwardJsonEvent,
+          });
+        }
+
+        // Stage 4: Local workspace agent fallback if CLI still did not emit an agent message
+        if (!result.receivedAgentMessage && turnSession.status === 'running') {
+          await executeLocalWorkspaceAgentFallback({
+            prompt: composedPrompt,
+            targetCwd,
+            augPath,
+            emitEvent,
+          });
+        } else {
+          const gitState = await inspectGitRepository(targetCwd);
+          emitEvent({
+            type: 'git.state',
+            git: gitState,
+          });
+        }
+
+        emitEvent({ type: 'stream.done' });
+        return;
       }
-    }
 
-    // Stage 2: Retry using `--full-auto` and native ~/.codex/config.toml model defaults
-    if (
-      (result.exitCode !== 0 || result.receivedTurnFailed) &&
-      !result.receivedAgentMessage
-    ) {
-      const fallbackArgs = buildExecArgs({
-        useResume: false,
-        passModelOverride: false,
-        passConfigOverrides: false,
-        useBypassSandbox: isFullAccess,
-        useFullAuto: !isFullAccess,
-        isolateMcp: !wantsMcp,
-      });
-
-      result = await runCodexCliProcess({
-        codexBin,
-        args: fallbackArgs,
-        promptText: composedPrompt,
-        targetCwd,
-        realHome,
-        augPath,
-        turnKey,
-        onJsonEvent: forwardJsonEvent,
-      });
-    }
-
-    // Stage 3: Bare `codex exec` retry
-    if (
-      (result.exitCode !== 0 || result.receivedTurnFailed) &&
-      !result.receivedAgentMessage
-    ) {
-      result = await runCodexCliProcess({
-        codexBin,
-        args: ['exec', '--json', '--skip-git-repo-check', '-C', targetCwd, '-'],
-        promptText: composedPrompt,
-        targetCwd,
-        realHome,
-        augPath,
-        turnKey,
-        onJsonEvent: forwardJsonEvent,
-      });
-    }
-
-    // Stage 4: Local workspace agent fallback if CLI still did not emit an agent message
-    if (!result.receivedAgentMessage) {
+      emitEvent({ type: 'turn.started' });
       await executeLocalWorkspaceAgentFallback({
         prompt: composedPrompt,
         targetCwd,
         augPath,
         emitEvent,
       });
-    } else {
-      const gitState = await inspectGitRepository(targetCwd);
-      emitEvent({
-        type: 'git.state',
-        git: gitState,
-      });
+      emitEvent({ type: 'stream.done' });
+    } finally {
+      if (turnSession.heartbeatTimer) {
+        clearInterval(turnSession.heartbeatTimer);
+        turnSession.heartbeatTimer = null;
+      }
+      if (turnSession.status === 'running') {
+        turnSession.status = 'completed';
+      }
+      turnSession.finishedAt = Date.now();
+      for (const sub of turnSession.subscribers) {
+        try {
+          sub.end();
+        } catch {
+          // ignore
+        }
+      }
+      turnSession.subscribers.clear();
     }
+  };
 
-    emitEvent({ type: 'stream.done' });
-    res.end();
-    return;
-  }
-
-  emitEvent({ type: 'turn.started' });
-  await executeLocalWorkspaceAgentFallback({
-    prompt: composedPrompt,
-    targetCwd,
-    augPath,
-    emitEvent,
-  });
-  emitEvent({ type: 'stream.done' });
-  res.end();
+  turnSession.executionPromise = executeWorkflow();
+  await turnSession.executionPromise;
 }
 
 export function interruptLocalCodexTurn(turnIdOrThreadId) {
-  const proc = activeTurnProcesses.get(turnIdOrThreadId);
+  const resolvedKey =
+    activeTurnProcesses.has(turnIdOrThreadId)
+      ? turnIdOrThreadId
+      : activeThreadTurnKeyMap.get(turnIdOrThreadId) || turnIdOrThreadId;
+
+  const session = activeTurnSessions.get(resolvedKey);
+  if (session) {
+    session.status = 'interrupted';
+    session.finishedAt = Date.now();
+  }
+
+  const proc = activeTurnProcesses.get(resolvedKey) || activeTurnProcesses.get(turnIdOrThreadId);
   if (proc) {
-    try {
-      if (IS_WIN && proc.pid) {
-        exec(`taskkill /pid ${proc.pid} /T /F`);
-      } else {
-        proc.kill('SIGINT');
-      }
-    } catch {
-      // ignore
-    }
+    killChildProcessSafely(proc);
+    activeTurnProcesses.delete(resolvedKey);
     activeTurnProcesses.delete(turnIdOrThreadId);
     return true;
   }
-  return false;
+  return Boolean(session);
 }
 
 export async function openInMacApp(targetPath, appId = 'cursor') {

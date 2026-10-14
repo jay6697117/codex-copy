@@ -10,12 +10,14 @@ const SERVER_PORT = Number(process.env.PORT || 4500);
 let mainWindow = null;
 let appServerProc = null;
 let codexCliProc = null;
+let isQuitting = false;
 
 function resolveAppRoot() {
   return path.resolve(__dirname, '..');
 }
 
 function startEmbeddedAppServer() {
+  if (isQuitting) return;
   const appRoot = resolveAppRoot();
   const serverScript = path.join(appRoot, 'server', 'app-server.mjs');
   const distDir = path.join(appRoot, 'dist');
@@ -37,6 +39,12 @@ function startEmbeddedAppServer() {
   });
   appServerProc.stderr.on('data', (chunk) => {
     process.stderr.write(`[app-server] ${chunk}`);
+  });
+  appServerProc.on('exit', () => {
+    appServerProc = null;
+    if (!isQuitting) {
+      setTimeout(() => startEmbeddedAppServer(), 500);
+    }
   });
 }
 
@@ -128,16 +136,18 @@ app.whenReady().then(async () => {
 });
 
 app.on('before-quit', () => {
+  isQuitting = true;
   stopChildProcess(appServerProc);
   stopChildProcess(codexCliProc);
 });
 
 app.on('window-all-closed', () => {
-  stopChildProcess(appServerProc);
-  appServerProc = null;
-  stopChildProcess(codexCliProc);
-  codexCliProc = null;
   if (!IS_MAC) {
+    isQuitting = true;
+    stopChildProcess(appServerProc);
+    appServerProc = null;
+    stopChildProcess(codexCliProc);
+    codexCliProc = null;
     app.quit();
   }
 });
