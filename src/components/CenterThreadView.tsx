@@ -19,6 +19,8 @@ import {
   PanelLeftOpen,
   PanelRight,
   Folder,
+  FolderPlus,
+  FolderOpen,
   Laptop,
   RotateCcw,
   Settings,
@@ -69,6 +71,8 @@ interface CenterThreadViewProps {
   activeProject: ProjectWorkspace;
   projects: ProjectWorkspace[];
   onSelectProject: (projectId: string) => void;
+  onOpenWorkspaceModal: () => void;
+  onPickNativeFolder: () => void;
   thread: Thread;
   worktrees: WorktreeInfo[];
   skills: SkillDefinition[];
@@ -119,7 +123,6 @@ interface CenterThreadViewProps {
   ) => void;
 }
 
-// 1:1 Model Catalog from Screenshot 3 of the real local Codex Desktop App
 const REAL_CODEX_MODELS: CodexModelInfo[] = [
   {
     slug: 'default',
@@ -179,8 +182,6 @@ const REAL_CODEX_MODELS: CodexModelInfo[] = [
   },
 ];
 
-// 6-Stop Slider Levels from Screenshot 2 of the real local Codex Desktop App
-// Stop 0: 低, Stop 1: 中, Stop 2: 高, Stop 3: 极高 (thumb position in Screenshot 2!), Stop 4: 超高, Stop 5: 最大
 const SLIDER_EFFORT_STOPS: Array<{
   id: ReasoningEffort;
   labelZh: string;
@@ -194,6 +195,24 @@ const SLIDER_EFFORT_STOPS: Array<{
   { id: 'max', labelZh: '最大', labelEn: 'Max' },
 ];
 
+function isCleanReasoningStep(step: string): boolean {
+  const s = (step || '').trim();
+  if (!s) return false;
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(s)) return false;
+  if (/\b(ERROR|WARN|INFO|DEBUG|TRACE)\b\s+codex_/.test(s)) return false;
+  if (
+    s.startsWith('正在调用 ') ||
+    s.includes('codex_rmcp_client') ||
+    s.includes('codex_models_manager') ||
+    s.includes('refresh_transaction') ||
+    s.includes('invalid_grant') ||
+    s.includes('failed to refresh available models')
+  ) {
+    return false;
+  }
+  return true;
+}
+
 export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
   lang,
   sidebarCollapsed,
@@ -203,6 +222,8 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
   activeProject,
   projects,
   onSelectProject,
+  onOpenWorkspaceModal,
+  onPickNativeFolder,
   thread,
   skills,
   workspaceFiles,
@@ -267,7 +288,6 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
     return () => clearInterval(timer);
   }, [isRunning]);
 
-  // Merge REAL_CODEX_MODELS with any extra server models
   const serverCatalog = localCodexStatus?.config?.effective?.modelCatalog || [];
   const mergedCatalogMap = new Map<string, CodexModelInfo>();
   for (const item of REAL_CODEX_MODELS) {
@@ -541,7 +561,7 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
     if (!steps || steps.length === 0) return '';
     for (let i = steps.length - 1; i >= 0; i--) {
       const step = (steps[i] || '').trim();
-      if (!step) continue;
+      if (!isCleanReasoningStep(step)) continue;
       const boldMatch = step.match(/\*\*(.+?)\*\*/);
       if (boldMatch && boldMatch[1].trim().length > 1) {
         return boldMatch[1].trim();
@@ -552,16 +572,12 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
         .filter(
           (l) =>
             l.length >= 2 &&
-            !/^[{}[\](),.;:'"`_-]+$/.test(l) &&
-            !l.startsWith('at ') &&
-            !l.startsWith('Error: spawn') &&
-            !l.startsWith('errno:') &&
-            !l.startsWith('syscall:') &&
-            !l.startsWith('spawnargs:')
+            isCleanReasoningStep(l) &&
+            !/^[{}[\](),.;:'"`_-]+$/.test(l)
         );
       if (lines.length > 0) {
         const candidate = lines[0];
-        return candidate.length > 52 ? `${candidate.slice(0, 52)}...` : candidate;
+        return candidate.length > 56 ? `${candidate.slice(0, 56)}...` : candidate;
       }
     }
     return '';
@@ -626,8 +642,9 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
         );
 
       case 'reasoning': {
-        const stepsCount = item.reasoningSteps?.length || 0;
-        const latestHeadline = extractLatestHeadline(item.reasoningSteps);
+        const cleanSteps = (item.reasoningSteps || []).filter(isCleanReasoningStep);
+        const stepsCount = cleanSteps.length;
+        const latestHeadline = extractLatestHeadline(cleanSteps);
         const displaySeconds =
           item.status === 'streaming'
             ? Math.max(item.durationSeconds || 1, liveThinkingTick)
@@ -639,8 +656,10 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
             className="rounded-xl codex-card border codex-border overflow-hidden transition-all"
           >
             <button
-              onClick={() => toggleItemExpand(item.id, isExpanded)}
-              className="w-full px-3.5 py-2 flex items-center justify-between gap-2 text-xs codex-text-secondary codex-hover transition-colors"
+              onClick={() => {
+                if (stepsCount > 0) toggleItemExpand(item.id, isExpanded);
+              }}
+              className="w-full px-3.5 py-2.5 flex items-center justify-between gap-2 text-xs codex-text-secondary codex-hover transition-colors"
             >
               <div className="flex items-center gap-2 min-w-0">
                 {item.status === 'streaming' ? (
@@ -653,37 +672,43 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
                     ? `${i18n.thread.thinking} (${displaySeconds}s)...`
                     : `${i18n.thread.thoughtFor} ${displaySeconds}s`}
                 </span>
-                {latestHeadline && (
+                {latestHeadline ? (
                   <span className="codex-text-muted truncate text-[11.5px]">
                     · {latestHeadline}
                   </span>
-                )}
+                ) : item.status === 'streaming' ? (
+                  <span className="codex-text-muted truncate text-[11.5px]">
+                    · {lang === 'zh-CN' ? '正在分析上下文并生成方案' : 'Analyzing context'}
+                  </span>
+                ) : null}
               </div>
 
-              <div className="flex items-center gap-2 shrink-0">
-                {stepsCount > 0 && (
+              {stepsCount > 0 && (
+                <div className="flex items-center gap-2 shrink-0">
                   <span className="text-[10px] font-mono px-1.5 py-0.2 rounded codex-elevated border codex-border codex-text-muted">
                     {stepsCount} {i18n.thread.reasoningStepsUnit}
                   </span>
-                )}
-                {isExpanded ? (
-                  <ChevronDown className="w-3.5 h-3.5 codex-text-muted" />
-                ) : (
-                  <ChevronRight className="w-3.5 h-3.5 codex-text-muted" />
-                )}
-              </div>
+                  {isExpanded ? (
+                    <ChevronDown className="w-3.5 h-3.5 codex-text-muted" />
+                  ) : (
+                    <ChevronRight className="w-3.5 h-3.5 codex-text-muted" />
+                  )}
+                </div>
+              )}
             </button>
 
-            {isExpanded && item.reasoningSteps && item.reasoningSteps.length > 0 && (
-              <div className="px-3.5 py-2.5 border-t codex-border space-y-2 text-xs codex-text-secondary bg-black/[0.02]">
-                {item.reasoningSteps.map((step, idx) => (
-                  <div
-                    key={idx}
-                    className="pl-3 border-l-2 border-[var(--accent-primary)]/40 leading-relaxed space-y-1"
-                  >
-                    {step.split('\n').map((line, lIdx) => (
-                      <div key={lIdx}>{renderInlineFormatting(line)}</div>
-                    ))}
+            {isExpanded && stepsCount > 0 && (
+              <div className="px-4 py-3 border-t codex-border space-y-2.5 text-xs codex-text-secondary bg-black/10">
+                {cleanSteps.map((step, idx) => (
+                  <div key={idx} className="flex items-start gap-2.5 leading-relaxed">
+                    <span className="w-1.5 h-1.5 rounded-full bg-[#2B7FFF]/80 mt-1.5 shrink-0" />
+                    <div className="space-y-1 min-w-0 flex-1">
+                      {step.split('\n').map((line, lIdx) => (
+                        <div key={lIdx} className="break-words">
+                          {renderInlineFormatting(line)}
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -907,9 +932,9 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
   };
 
   return (
-    <section className="flex-1 flex flex-col h-full codex-app-bg min-w-[420px] overflow-hidden relative">
-      {/* Top Window Bar (1:1 Match with Real Codex Desktop App Screenshot 1) */}
-      <header className="h-9 px-3.5 flex items-center justify-between gap-2 shrink-0 select-none app-drag-region z-20">
+    <section className="flex-1 flex flex-col h-full min-h-0 codex-app-bg min-w-[420px] overflow-hidden relative">
+      {/* Top Window Bar (`h-10` aligned with LeftSidebar top row) */}
+      <header className="h-10 px-3.5 flex items-center justify-between gap-2 shrink-0 select-none app-drag-region z-20">
         <div className="flex items-center gap-2 min-w-0 app-no-drag">
           {sidebarCollapsed && (
             <div className="flex items-center gap-1">
@@ -936,6 +961,11 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
               </span>
               <span className="codex-text-muted">·</span>
               <span className="font-mono text-[11px] codex-text-muted flex items-center gap-1">
+                <Folder className="w-3 h-3 codex-accent-text" />
+                {activeProject.name}
+              </span>
+              <span className="codex-text-muted">·</span>
+              <span className="font-mono text-[11px] codex-text-muted flex items-center gap-1">
                 <GitBranch className="w-3 h-3 codex-accent-text" />
                 {thread.branch}
               </span>
@@ -943,13 +973,13 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
           )}
         </div>
 
-        {/* Top-Right Controls: IDE Open, Git Commit, Inspector Drawer Toggle, and the `[+]` Square Button from Screenshot 1 */}
+        {/* Top-Right Controls */}
         <div className="flex items-center gap-1.5 shrink-0 app-no-drag">
           {thread.turns.length > 0 && (
             <>
               <button
                 onClick={() => onOpenInEditor('cursor')}
-                title="在 Cursor / VS Code 中打开当前项目"
+                title="在 Cursor / VS Code 中打开当前工作空间目录"
                 className="px-2 py-1 rounded-md text-[11px] codex-text-secondary codex-hover flex items-center gap-1"
               >
                 <ExternalLink className="w-3 h-3" />
@@ -985,7 +1015,6 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
             <Settings className="w-3.5 h-3.5" />
           </button>
 
-          {/* Exact Top-Right Square `[+]` Button from Screenshot 1 */}
           <button
             onClick={() => onToggleRightDrawer('terminal')}
             title="展开/收起工作台面板 (终端 / 文件树 / 代码差异)"
@@ -997,9 +1026,8 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
       </header>
 
       {/* Main Conversation / Empty State Canvas */}
-      <div className="flex-1 overflow-y-auto px-6 py-4 flex flex-col">
+      <div className="flex-1 min-h-0 overflow-y-auto px-6 py-4 flex flex-col">
         {thread.turns.length === 0 ? (
-          /* 1:1 Empty State from Screenshot 1: Scalloped Cloud Terminal Icon + `我们要构建什么？` */
           <div className="flex-1 flex flex-col items-center justify-center select-none pb-8">
             <div className="mb-5 text-[#6E6E73]">
               <svg
@@ -1009,7 +1037,6 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
                 fill="none"
                 xmlns="http://www.w3.org/2000/svg"
               >
-                {/* Scalloped 8-lobe OpenAI Codex emblem outline */}
                 <path
                   d="M32 6C36.2 6 39.8 8.3 41.5 11.8C45.2 11.1 49.1 12.7 51.2 16C53.3 19.3 53.1 23.5 50.9 26.6C53.8 29.2 55 33.3 53.9 37.1C52.8 40.9 49.6 43.7 45.7 44.3C45.6 48.2 43.1 51.7 39.4 53C35.7 54.3 31.6 53.2 29.1 50.3C26.1 52.8 21.8 53.5 18.2 51.8C14.6 50.1 12.4 46.5 12.5 42.5C9.1 40.6 7.1 36.8 7.5 32.9C7.9 29 10.6 25.7 14.3 24.5C13.6 20.7 15.2 16.8 18.5 14.7C21.8 12.6 26 12.8 29.1 15C30 10 31.1 6 32 6Z"
                   stroke="currentColor"
@@ -1017,7 +1044,6 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
                   strokeLinecap="round"
                   strokeLinejoin="round"
                 />
-                {/* `>_` Terminal Prompt inside emblem */}
                 <path
                   d="M23 26L30 32L23 38"
                   stroke="currentColor"
@@ -1090,11 +1116,11 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
       </div>
 
       {/* =====================================================================
-          Bottom Two-Tier Floating Composer (1:1 Match with Screenshots 1, 2, 3)
+          Bottom Two-Tier Floating Composer
          ===================================================================== */}
       <div className="px-6 pb-5 pt-1 shrink-0">
         <div className="max-w-[660px] mx-auto relative">
-          {/* Active Goal Banner (`/goal`) if set */}
+          {/* Active Goal Banner (`/goal`) */}
           {(thread.goal || composerMode === 'goal' || editingGoal) && (
             <div className="mb-2 rounded-xl codex-card border codex-border px-3.5 py-2 flex items-center justify-between gap-3 shadow-sm">
               <div className="flex items-center gap-2 min-w-0 flex-1">
@@ -1173,12 +1199,9 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
             </div>
           )}
 
-          {/* =================================================================
-              POPOVER 1: Screenshot 2 — 6-Stop Reasoning Effort Slider Popover
-             ================================================================= */}
+          {/* POPOVER 1: 6-Stop Reasoning Effort Slider Popover */}
           {showEffortPopover && !showModelPopover && (
             <div className="absolute bottom-14 right-8 w-[276px] rounded-[22px] bg-[#262628] border border-white/[0.1] shadow-2xl p-4 z-40 select-none">
-              {/* Top Row: Lightning `⚡` | Blue Effort Label (`极高`) | Reset `↻` */}
               <div className="flex items-center justify-between">
                 <button
                   type="button"
@@ -1207,7 +1230,6 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
                 </button>
               </div>
 
-              {/* Second Row: Clickable Model Trigger `GPT-6.1 Sol >` (Opens Screenshot 3 Model Popover) */}
               <div className="flex justify-center mt-0.5 mb-3.5">
                 <button
                   type="button"
@@ -1225,9 +1247,7 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
                 </button>
               </div>
 
-              {/* Third Row: 6-Stop Capsule Slider (`低`, `中`, `高`, `极高`, `超高`, `最大`) */}
               <div className="relative h-8 rounded-full bg-[#3A3A3C] flex items-center px-1.5">
-                {/* Active Blue Fill Bar up to current stop */}
                 <div
                   style={{
                     width: `calc(${
@@ -1237,7 +1257,6 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
                   className="absolute left-0 top-0 bottom-0 rounded-full bg-[#2B7FFF] transition-all duration-150 pointer-events-none"
                 />
 
-                {/* 6 Interactive Stop Positions */}
                 <div className="relative z-10 w-full flex items-center justify-between px-1">
                   {SLIDER_EFFORT_STOPS.map((stop, idx) => {
                     const isThumb = idx === activeStopIndex;
@@ -1273,12 +1292,9 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
             </div>
           )}
 
-          {/* =================================================================
-              POPOVER 2: Screenshot 3 — `Daybreak` + `默认 (推荐模型集)` + `GPT-6.1 Sol` Model Menu
-             ================================================================= */}
+          {/* POPOVER 2: `Daybreak` + `默认 (推荐模型集)` + `GPT-6.1 Sol` Model Menu */}
           {showModelPopover && (
             <div className="absolute bottom-14 right-8 w-[248px] rounded-[22px] bg-[#262628] border border-white/[0.1] shadow-2xl py-3 px-2 z-40 select-none">
-              {/* Row 1: `Daybreak` Toggle Switch */}
               <div className="px-3 py-1 flex items-center justify-between">
                 <span className="text-[14px] font-medium text-white">Daybreak</span>
                 <button
@@ -1296,15 +1312,12 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
                 </button>
               </div>
 
-              {/* Divider */}
               <div className="border-t border-white/[0.08] my-2 mx-2" />
 
-              {/* Section Header: `选择模型` */}
               <div className="px-3 py-1 text-[12px] font-medium text-[#8E8E93]">
                 {lang === 'zh-CN' ? '选择模型' : 'Select model'}
               </div>
 
-              {/* Model List Items */}
               <div className="max-h-72 overflow-y-auto space-y-0.5 mt-0.5">
                 {modelCatalog.map((m) => {
                   const isSelected = activeModelSlug === m.slug && !daybreakEnabled;
@@ -1346,35 +1359,74 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
             </div>
           )}
 
-          {/* Popover: Project Picker (`选择项目`) */}
+          {/* POPOVER 3: Multi-Workspace Project Switcher & New Directory Creator (`选择项目`) */}
           {showProjectPicker && (
-            <div className="absolute bottom-full left-2 mb-2 w-64 rounded-xl bg-[#262628] border border-white/10 shadow-2xl p-1.5 z-30">
-              <div className="px-2.5 py-1 text-[11px] text-[#8E8E93] flex items-center justify-between">
-                <span>选择工作区项目</span>
+            <div className="absolute bottom-full left-2 mb-2 w-80 rounded-2xl bg-[#262628] border border-white/10 shadow-2xl p-2 z-30 space-y-1.5">
+              <div className="px-2.5 py-1 text-[11px] font-medium text-[#8E8E93] flex items-center justify-between">
+                <span>切换或新建工作空间目录</span>
                 <button onClick={() => setShowProjectPicker(false)}>
-                  <X className="w-3 h-3" />
+                  <X className="w-3.5 h-3.5" />
                 </button>
               </div>
-              {projects.map((p) => (
+
+              <div className="max-h-52 overflow-y-auto space-y-0.5">
+                {projects.map((p) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => {
+                      onSelectProject(p.id);
+                      setShowProjectPicker(false);
+                    }}
+                    className={`w-full text-left px-2.5 py-2 rounded-xl hover:bg-white/10 text-xs flex items-center justify-between gap-2 ${
+                      p.id === activeProject.id ? 'bg-white/[0.07] text-white' : 'text-[#D1D1D6]'
+                    }`}
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 font-medium truncate">
+                        <Folder className="w-3.5 h-3.5 text-[#4DA3FF] shrink-0" />
+                        <span className="truncate">{p.name}</span>
+                      </div>
+                      <div className="text-[10.5px] font-mono text-[#8E8E93] truncate pl-5.5">
+                        {p.repoPath}
+                      </div>
+                    </div>
+                    {p.id === activeProject.id && (
+                      <Check className="w-3.5 h-3.5 text-[#4DA3FF] shrink-0" />
+                    )}
+                  </button>
+                ))}
+              </div>
+
+              <div className="border-t border-white/[0.08] pt-1.5 space-y-1">
                 <button
-                  key={p.id}
+                  type="button"
                   onClick={() => {
-                    onSelectProject(p.id);
                     setShowProjectPicker(false);
+                    onOpenWorkspaceModal();
                   }}
-                  className="w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-white/10 text-xs text-white flex items-center justify-between"
+                  className="w-full text-left px-2.5 py-1.5 rounded-xl hover:bg-white/10 text-xs text-[#4DA3FF] font-medium flex items-center gap-2"
                 >
-                  <span className="flex items-center gap-2 truncate">
-                    <Folder className="w-3.5 h-3.5 text-[#8E8E93]" />
-                    <span>{p.name}</span>
-                  </span>
-                  {p.id === activeProject.id && <Check className="w-3.5 h-3.5" />}
+                  <FolderPlus className="w-3.5 h-3.5" />
+                  <span>+ 新建或浏览导入工作目录...</span>
                 </button>
-              ))}
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowProjectPicker(false);
+                    onPickNativeFolder();
+                  }}
+                  className="w-full text-left px-2.5 py-1.5 rounded-xl hover:bg-white/10 text-xs text-white flex items-center gap-2"
+                >
+                  <FolderOpen className="w-3.5 h-3.5 text-[#8E8E93]" />
+                  <span>打开系统 Finder 选择/新建文件夹...</span>
+                </button>
+              </div>
             </div>
           )}
 
-          {/* Popover: Permission Selector (`完全访问` / `默认权限` / `只读权限`) */}
+          {/* Popover: Permission Selector */}
           {showPermMenu && (
             <div className="absolute bottom-14 left-10 w-60 rounded-xl bg-[#262628] border border-white/10 shadow-2xl p-1.5 z-30">
               {[
@@ -1518,12 +1570,9 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
             </div>
           )}
 
-          {/* =================================================================
-              Tier 1 (Top Attachment Bar of Composer): `📁 选择项目` + `💻 此计算机`
-              (1:1 Match with Screenshot 1)
-             ================================================================= */}
+          {/* Tier 1 (Top Attachment Bar of Composer): Shows Active Workspace & Environment */}
           <div className="mx-2 px-3.5 py-2 rounded-t-2xl bg-[#1B1B1D] border border-b-0 border-white/[0.07] flex items-center justify-between text-[12px] text-[#9A9A9E] select-none">
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-4 min-w-0">
               <button
                 type="button"
                 onClick={() => {
@@ -1531,10 +1580,14 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
                   setShowEffortPopover(false);
                   setShowModelPopover(false);
                 }}
-                className="flex items-center gap-1.5 hover:text-white transition-colors"
+                title={`当前工作空间: ${activeProject.repoPath}（点击切换或新建工作目录）`}
+                className="flex items-center gap-1.5 hover:text-white transition-colors truncate"
               >
-                <Folder className="w-3.5 h-3.5 text-[#8E8E93]" />
-                <span>{lang === 'zh-CN' ? '选择项目' : activeProject.name}</span>
+                <Folder className="w-3.5 h-3.5 text-[#8E8E93] shrink-0" />
+                <span className="truncate font-medium text-[#D1D1D6]">
+                  {activeProject.name || '选择项目'}
+                </span>
+                <ChevronDown className="w-3 h-3 text-[#6E6E73] shrink-0" />
               </button>
 
               <button
@@ -1545,7 +1598,7 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
                   })
                 }
                 title="切换此计算机 (Local) / 独立工作树 (Worktree)"
-                className="flex items-center gap-1.5 hover:text-white transition-colors"
+                className="flex items-center gap-1.5 hover:text-white transition-colors shrink-0"
               >
                 <Laptop className="w-3.5 h-3.5 text-[#8E8E93]" />
                 <span>
@@ -1560,7 +1613,17 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
               </button>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={onOpenWorkspaceModal}
+                title="新建或导入工作目录"
+                className="px-2 py-0.5 rounded text-[11px] hover:bg-white/[0.06] hover:text-white flex items-center gap-1 transition-colors"
+              >
+                <FolderPlus className="w-3 h-3 text-[#4DA3FF]" />
+                <span className="hidden sm:inline">新建工作目录</span>
+              </button>
+
               <button
                 type="button"
                 onClick={() =>
@@ -1578,15 +1641,11 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
             </div>
           </div>
 
-          {/* =================================================================
-              Tier 2 (Main Composer Card): `随心输入`, `+`, `(!) 完全访问`, `GPT-6.1 Sol 极高 ⌄`, Mic, Waveform/Send
-              (1:1 Match with Screenshots 1, 2, 3)
-             ================================================================= */}
+          {/* Tier 2 (Main Composer Card) */}
           <form
             onSubmit={(e) => handleSubmit(e)}
             className="rounded-2xl codex-composer-bg border border-white/[0.09] shadow-2xl px-4 py-3 space-y-3"
           >
-            {/* Attached `@file` and `$skill` chips */}
             {(attachedFiles.length > 0 || invokedSkills.length > 0) && (
               <div className="flex flex-wrap items-center gap-1.5">
                 {invokedSkills.map((skill) => (
@@ -1624,7 +1683,6 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
               </div>
             )}
 
-            {/* Prompt Input Textarea (`随心输入`) */}
             <textarea
               rows={2}
               value={composerText}
@@ -1645,9 +1703,7 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
               className="w-full bg-transparent text-[14px] codex-text-primary placeholder:text-[#6E6E73] focus:outline-none resize-none leading-relaxed font-sans"
             />
 
-            {/* Bottom Control Row inside Composer */}
             <div className="flex items-center justify-between gap-2 pt-0.5 select-none">
-              {/* Left: `+` and Orange `(!) 完全访问` */}
               <div className="flex items-center gap-3">
                 <button
                   type="button"
@@ -1695,7 +1751,6 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
                 </button>
               </div>
 
-              {/* Right: `GPT-6.1 Sol 极高 ⌄` / `选择强度 ⌄` + Mic + White Waveform/Send Circle */}
               <div className="flex items-center gap-2.5">
                 <button
                   type="button"
@@ -1732,7 +1787,6 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
                   <ChevronDown className="w-3.5 h-3.5 text-[#8E8E93]" />
                 </button>
 
-                {/* Microphone Button */}
                 <button
                   type="button"
                   onClick={() => {
@@ -1746,7 +1800,6 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
                   <Mic className="w-4 h-4" />
                 </button>
 
-                {/* White Circle Waveform / Send / Stop Button (1:1 Match with Screenshots 1, 2, 3) */}
                 {isRunning ? (
                   <button
                     type="button"
@@ -1765,7 +1818,6 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
                     {composerText.trim().length > 0 ? (
                       <ArrowUp className="w-4 h-4 stroke-[2.5]" />
                     ) : (
-                      /* 3-bar Voice Waveform Icon matching Screenshots 1, 2, 3 */
                       <svg
                         width="14"
                         height="14"

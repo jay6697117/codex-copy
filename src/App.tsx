@@ -35,12 +35,16 @@ import {
 import {
   checkAppServerHealth,
   commitGitChanges,
+  createWorkspaceDirectory,
   fetchGitStatus,
   fetchLocalCodexStatus,
+  fetchWorkspaces,
   fetchWorkspaceFileTree,
   manageGitWorktree,
   openInExternalApp,
+  pickNativeWorkspaceFolder,
   readWorkspaceFile,
+  removeWorkspaceDirectory,
   revertGitFile,
   runInteractiveAgentTurn,
   saveCodexModelPreferences,
@@ -52,20 +56,22 @@ import { LeftSidebar } from './components/LeftSidebar';
 import { CenterThreadView } from './components/CenterThreadView';
 import { RightInspectorPane } from './components/RightInspectorPane';
 import { MainFeatureViews } from './components/MainFeatureViews';
-import { CommandPaletteModal, RpcInspectorModal } from './components/Modals';
+import {
+  CommandPaletteModal,
+  RpcInspectorModal,
+  WorkspaceManagerModal,
+} from './components/Modals';
 import { t, SKIN_METAS } from './i18n/translations';
 
 const VALID_SKINS: ThemeSkin[] = ['codex', 'wechat', 'qq', 'dingtalk'];
 const VALID_LANGS: AppLanguage[] = ['zh-CN', 'en-US'];
 
 export function App() {
-  // 1. Default Simplified Chinese (`zh-CN`), switchable to English (`en-US`) in Settings
   const [lang, setLang] = useState<AppLanguage>(() => {
     const saved = localStorage.getItem('codex_desktop_lang_v2') as AppLanguage | null;
     return saved && VALID_LANGS.includes(saved) ? saved : 'zh-CN';
   });
 
-  // 2. Default Native Codex Dark Skin (`codex`), switchable to WeChat (`wechat`), QQ (`qq`), and DingTalk (`dingtalk`) in Settings
   const [skin, setSkin] = useState<ThemeSkin>(() => {
     const saved = localStorage.getItem('codex_desktop_skin_v3') as ThemeSkin | null;
     return saved && VALID_SKINS.includes(saved) ? saved : 'codex';
@@ -83,14 +89,12 @@ export function App() {
     localStorage.setItem('codex_desktop_lang_v2', lang);
   }, [lang]);
 
-  // Layout & Navigation State
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(false);
   const [rightDrawerOpen, setRightDrawerOpen] = useState<boolean>(false);
   const [activeNav, setActiveNav] = useState<NavSection>('threads');
   const [rightTab, setRightTab] = useState<RightPanelTab>('diff');
   const [layoutMode] = useState<WorkspaceLayoutMode>('standard');
 
-  // Workspace, Projects, Threads & Local Codex Environment State
   const [localCodexStatus, setLocalCodexStatus] = useState<LocalCodexStatus | null>(null);
   const [projects, setProjects] = useState<ProjectWorkspace[]>(INITIAL_PROJECTS);
   const [activeProjectId, setActiveProjectId] = useState<string>(INITIAL_PROJECTS[0].id);
@@ -113,6 +117,7 @@ export function App() {
 
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState<boolean>(false);
   const [isRpcInspectorOpen, setIsRpcInspectorOpen] = useState<boolean>(false);
+  const [isWorkspaceModalOpen, setIsWorkspaceModalOpen] = useState<boolean>(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   const activeTurnInterruptRef = useRef<Record<string, () => void>>({});
@@ -128,22 +133,36 @@ export function App() {
     setRpcLogs((prev) => [entry, ...prev.slice(0, 120)]);
   };
 
-  // Sync Local Machine Codex Status, ~/.codex/sessions, ~/.codex/skills, and live Git diffs
-  const syncLocalEnvironmentAndGit = async () => {
-    const [codexStatus, gitState, tree, agentsMd] = await Promise.all([
-      fetchLocalCodexStatus(),
-      fetchGitStatus(),
-      fetchWorkspaceFileTree(),
-      readWorkspaceFile('AGENTS.md'),
+  const activeProject = useMemo(
+    () => projects.find((p) => p.id === activeProjectId) || projects[0],
+    [projects, activeProjectId]
+  );
+
+  const activeThread = useMemo(
+    () => threads.find((th) => th.id === activeThreadId) || threads[0],
+    [threads, activeThreadId]
+  );
+
+  // Sync Local Machine Codex Status, Workspaces, ~/.codex/sessions, ~/.codex/skills, and live Git diffs
+  const syncLocalEnvironmentAndGit = async (overrideCwd?: string) => {
+    const targetCwd = overrideCwd || activeProject?.repoPath;
+    const [wsData, codexStatus, gitState, tree, agentsMd] = await Promise.all([
+      fetchWorkspaces(),
+      fetchLocalCodexStatus(targetCwd),
+      fetchGitStatus(targetCwd),
+      fetchWorkspaceFileTree(targetCwd),
+      readWorkspaceFile('AGENTS.md', targetCwd),
     ]);
 
+    if (wsData?.workspaces && wsData.workspaces.length > 0) {
+      setProjects(wsData.workspaces);
+    }
     if (tree.length > 0) setFileTree(tree);
     if (agentsMd) setAgentsMdContent(agentsMd);
 
     if (codexStatus) {
       setLocalCodexStatus(codexStatus);
 
-      // Merge real local skills from ~/.codex/skills & .codex/skills
       if (Array.isArray(codexStatus.localSkills) && codexStatus.localSkills.length > 0) {
         setSkills((prev) => {
           const existingSlugs = new Set(prev.map((s) => s.slug));
@@ -152,7 +171,6 @@ export function App() {
         });
       }
 
-      // Import real local Codex CLI sessions from ~/.codex/sessions & history.jsonl into Threads
       if (Array.isArray(codexStatus.localSessions) && codexStatus.localSessions.length > 0) {
         const importedThreads: Thread[] = codexStatus.localSessions.map((sess) => ({
           id: sess.id,
@@ -166,11 +184,11 @@ export function App() {
           branch: sess.branch || 'main',
           cwd: sess.cwd,
           environmentMode: 'local',
-          permissionMode: 'workspace-write',
-          model: sess.model || codexStatus.config.effective.model || 'gpt-5.4',
+          permissionMode: 'full-access',
+          model: sess.model || codexStatus.config.effective.model || 'gpt-6.1-sol',
           personality: 'pragmatic',
           reasoningEffort:
-            (codexStatus.config.effective.reasoningEffort as any) || 'high',
+            (codexStatus.config.effective.reasoningEffort as any) || 'xhigh',
           subagent: 'default',
           updatedAt: sess.updatedAt,
           tokenUsage: 'Local CLI session',
@@ -183,9 +201,10 @@ export function App() {
                     threadId: sess.id,
                     status: 'completed',
                     startedAt: new Date(sess.mtimeMs).toISOString(),
-                    model: sess.model || codexStatus.config.effective.model || 'gpt-5.4',
+                    model:
+                      sess.model || codexStatus.config.effective.model || 'gpt-6.1-sol',
                     personality: 'pragmatic',
-                    reasoningEffort: 'high',
+                    reasoningEffort: 'xhigh',
                     items: sess.items,
                   },
                 ]
@@ -194,31 +213,21 @@ export function App() {
         }));
 
         setThreads((prev) => {
+          const activeTitles = new Set(
+            prev
+              .filter((th) => !th.isLocalCliSession && th.turns.length > 0)
+              .map((th) => th.title)
+          );
           const importedMap = new Map(importedThreads.map((th) => [th.id, th]));
           const updatedPrev = prev.map((th) =>
             importedMap.has(th.id) ? importedMap.get(th.id)! : th
           );
           const existingIds = new Set(updatedPrev.map((th) => th.id));
-          const fresh = importedThreads.filter((th) => !existingIds.has(th.id));
+          const fresh = importedThreads.filter(
+            (th) => !existingIds.has(th.id) && !activeTitles.has(th.title)
+          );
           return [...updatedPrev, ...fresh];
         });
-      }
-
-      // Sync active thread model & reasoning effort with local ~/.codex/config.toml defaults
-      const configuredModel = codexStatus.config?.effective?.model;
-      const configuredEffort = codexStatus.config?.effective?.reasoningEffort as any;
-      if (configuredModel || configuredEffort) {
-        setThreads((prev) =>
-          prev.map((th, idx) =>
-            idx === 0
-              ? {
-                  ...th,
-                  model: configuredModel || th.model,
-                  reasoningEffort: configuredEffort || th.reasoningEffort,
-                }
-              : th
-          )
-        );
       }
     }
 
@@ -228,8 +237,8 @@ export function App() {
       }
       if (gitState.changedFiles) {
         setThreads((prev) =>
-          prev.map((th, idx) =>
-            idx === 0
+          prev.map((th) =>
+            th.id === activeThreadId
               ? {
                   ...th,
                   branch: gitState.branch || th.branch,
@@ -265,7 +274,99 @@ export function App() {
     syncLocalEnvironmentAndGit();
   }, []);
 
-  // Keyboard shortcuts: Cmd+K (Command Palette), Cmd+B (Toggle Sidebar), Cmd+J (Toggle Terminal)
+  // Switch active workspace project and sync its directory, file tree & git status
+  const handleSelectProject = async (projectId: string) => {
+    setActiveProjectId(projectId);
+    const targetProj = projects.find((p) => p.id === projectId);
+    if (!targetProj) return;
+
+    // Update current empty thread's cwd or switch to a thread in this project
+    setThreads((prev) =>
+      prev.map((th) =>
+        th.id === activeThreadId && th.turns.length === 0
+          ? { ...th, projectId: targetProj.id, cwd: targetProj.repoPath }
+          : th
+      )
+    );
+
+    await syncLocalEnvironmentAndGit(targetProj.repoPath);
+    showToast(`已切换工作空间目录: ${targetProj.repoPath}`);
+  };
+
+  const handleCreateOrImportWorkspace = async (params: {
+    parentDir?: string;
+    folderName?: string;
+    fullPath?: string;
+    initGit?: boolean;
+  }) => {
+    const res = await createWorkspaceDirectory(params);
+    if (res.ok && res.workspace) {
+      if (res.workspaces) setProjects(res.workspaces);
+      setActiveProjectId(res.workspace.id);
+      if (res.tree) setFileTree(res.tree);
+      // Create or bind a fresh thread in this new workspace
+      const newThread: Thread = {
+        id: `thr_${Date.now()}`,
+        projectId: res.workspace.id,
+        title: lang === 'zh-CN' ? '新聊天' : 'New chat',
+        pinned: false,
+        status: 'completed',
+        worktreeId: 'wt_main',
+        branch: res.git?.branch || 'main',
+        cwd: res.workspace.repoPath,
+        environmentMode: 'local',
+        permissionMode: 'full-access',
+        daybreakEnabled: false,
+        model: activeThread?.model || 'gpt-6.1-sol',
+        personality: 'pragmatic',
+        reasoningEffort: activeThread?.reasoningEffort || 'xhigh',
+        subagent: 'default',
+        updatedAt: '刚刚',
+        tokenUsage: '0 tokens',
+        diffSummary: res.git?.diffSummary || { files: 0, additions: 0, deletions: 0 },
+        turns: [],
+        changedFiles: res.git?.changedFiles || [],
+        goal: null,
+      };
+      setThreads((prev) => [newThread, ...prev]);
+      setActiveThreadId(newThread.id);
+      setActiveNav('threads');
+      showToast(`已创建并打开工作空间: ${res.workspace.repoPath}`);
+    } else if (res.error) {
+      showToast(`创建工作空间失败: ${res.error}`);
+    }
+  };
+
+  const handlePickNativeFolder = async () => {
+    const res = await pickNativeWorkspaceFolder();
+    if (res.ok && res.workspace) {
+      if (res.workspaces) setProjects(res.workspaces);
+      setActiveProjectId(res.workspace.id);
+      if (res.tree) setFileTree(res.tree);
+      setThreads((prev) =>
+        prev.map((th) =>
+          th.id === activeThreadId && th.turns.length === 0
+            ? { ...th, projectId: res.workspace!.id, cwd: res.workspace!.repoPath }
+            : th
+        )
+      );
+      await syncLocalEnvironmentAndGit(res.workspace.repoPath);
+      showToast(`已导入并切换至工作目录: ${res.workspace.repoPath}`);
+    }
+  };
+
+  const handleRemoveWorkspace = async (projectId: string) => {
+    const res = await removeWorkspaceDirectory(projectId);
+    if (res.ok && res.workspaces && res.workspaces.length > 0) {
+      setProjects(res.workspaces);
+      if (activeProjectId === projectId) {
+        setActiveProjectId(res.workspaces[0].id);
+      }
+      showToast('已从工作空间列表移除');
+    }
+  };
+
+  // Keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
@@ -278,21 +379,14 @@ export function App() {
         e.preventDefault();
         setRightTab('terminal');
         setRightDrawerOpen((v) => (rightTab === 'terminal' ? !v : true));
+      } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'o') {
+        e.preventDefault();
+        setIsWorkspaceModalOpen(true);
       }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, [rightTab]);
-
-  const activeProject = useMemo(
-    () => projects.find((p) => p.id === activeProjectId) || projects[0],
-    [projects, activeProjectId]
-  );
-
-  const activeThread = useMemo(
-    () => threads.find((th) => th.id === activeThreadId) || threads[0],
-    [threads, activeThreadId]
-  );
 
   const flatWorkspaceFiles = useMemo(() => {
     const list: string[] = [];
@@ -323,7 +417,6 @@ export function App() {
     setThreads((prev) => prev.map((th) => (th.id === threadId ? updater(th) : th)));
   };
 
-  // Start a real streaming turn via the local Codex CLI bridge
   const startStreamingTurnOnThread = (
     targetThread: Thread,
     prompt: string,
@@ -358,8 +451,13 @@ export function App() {
 
     updateThread(targetThread.id, (th) => ({
       ...th,
+      projectId: activeProject.id,
+      cwd: th.cwd || activeProject.repoPath,
       title:
-        th.turns.length === 0 || th.title === 'New thread' || th.title === '新建会话'
+        th.turns.length === 0 ||
+        th.title === 'New thread' ||
+        th.title === '新建会话' ||
+        th.title === '新聊天'
           ? prompt.slice(0, 56)
           : th.title,
       status: 'running',
@@ -484,9 +582,10 @@ export function App() {
     activeTurnInterruptRef.current[targetThread.id] = controller.interrupt;
   };
 
-  // Start a clean new thread
   const handleCreateNewThread = (projectId?: string) => {
     const targetProjId = projectId || activeProject.id;
+    const targetProj =
+      projects.find((p) => p.id === targetProjId) || activeProject;
     const defaultModel =
       localCodexStatus?.config?.effective?.model || 'gpt-6.1-sol';
     const defaultEffort =
@@ -494,13 +593,13 @@ export function App() {
 
     const newThread: Thread = {
       id: `thr_${Date.now()}`,
-      projectId: targetProjId,
+      projectId: targetProj.id,
       title: lang === 'zh-CN' ? '新聊天' : 'New chat',
       pinned: false,
       status: 'completed',
       worktreeId: 'wt_main',
       branch: activeThread?.branch || 'main',
-      cwd: activeProject.repoPath,
+      cwd: targetProj.repoPath,
       environmentMode: 'local',
       permissionMode: 'full-access',
       daybreakEnabled: false,
@@ -521,12 +620,11 @@ export function App() {
     setActiveNav('threads');
     sendJsonRpcRequest(
       'thread/start',
-      { model: newThread.model, cwd: activeProject.repoPath },
+      { model: newThread.model, cwd: targetProj.repoPath },
       appendRpcLog
     );
   };
 
-  // Send message from Composer
   const handleSendMessage = async (params: {
     prompt: string;
     attachedFiles: string[];
@@ -535,7 +633,11 @@ export function App() {
     mode?: ComposerMode;
     goalObjective?: string;
   }) => {
-    let targetThread = activeThread;
+    let targetThread = {
+      ...activeThread,
+      projectId: activeProject.id,
+      cwd: activeThread.cwd || activeProject.repoPath,
+    };
 
     if (params.createNewWorktree && targetThread.worktreeId === 'wt_main') {
       const slug = Math.random().toString(36).slice(2, 6);
@@ -544,7 +646,7 @@ export function App() {
       const wtId = `wt_${Date.now()}`;
       const wtPath =
         wtRes.worktreePath ||
-        `/Users/zhangjinhui/.codex/worktrees/codex-test/task-${slug}`;
+        `/Users/zhangjinhui/.codex/worktrees/${activeProject.name}/task-${slug}`;
 
       if (wtRes.git?.worktrees) {
         setWorktrees(wtRes.git.worktrees);
@@ -572,7 +674,7 @@ export function App() {
       }
 
       targetThread = {
-        ...activeThread,
+        ...targetThread,
         worktreeId: wtId,
         branch,
         cwd: wtPath,
@@ -597,7 +699,6 @@ export function App() {
     );
   };
 
-  // Mid-Turn Steering
   const handleSteerTurn = (steerText: string) => {
     const nowTime = new Date().toTimeString().split(' ')[0];
     const steerItem: TurnItem = {
@@ -622,7 +723,6 @@ export function App() {
     startStreamingTurnOnThread(activeThread, steerText, [], [], 'agent');
   };
 
-  // Interrupt active turn
   const handleInterruptTurn = () => {
     activeTurnInterruptRef.current[activeThread.id]?.();
     updateThread(activeThread.id, (th) => ({
@@ -635,7 +735,6 @@ export function App() {
     showToast(i18n.toasts.stoppedTurn);
   };
 
-  // Respond to Sandbox Approval Request
   const handleRespondApproval = (
     turnId: string,
     itemId: string,
@@ -693,7 +792,6 @@ export function App() {
 
   return (
     <div className="h-screen w-screen overflow-hidden flex codex-app-bg">
-      {/* Toast Notification */}
       {toastMessage && (
         <div className="fixed bottom-5 right-5 z-50 px-3.5 py-2 rounded-xl codex-elevated border codex-border text-xs font-medium codex-text-primary shadow-2xl flex items-center gap-2">
           <span className="w-2 h-2 rounded-full codex-accent-btn animate-pulse" />
@@ -701,7 +799,7 @@ export function App() {
         </div>
       )}
 
-      {/* Left Sidebar (Official Codex App Structure) */}
+      {/* Left Sidebar (with fixed Red Box 1 & Red Box 2 layout + Multi-Workspace controls) */}
       <LeftSidebar
         lang={lang}
         collapsed={sidebarCollapsed}
@@ -710,12 +808,13 @@ export function App() {
         onSelectNav={setActiveNav}
         projects={projects}
         activeProjectId={activeProject.id}
-        onSelectProject={setActiveProjectId}
+        onSelectProject={handleSelectProject}
         onToggleProjectExpand={(projId) =>
           setProjects((prev) =>
             prev.map((p) => (p.id === projId ? { ...p, expanded: !p.expanded } : p))
           )
         }
+        onOpenWorkspaceModal={() => setIsWorkspaceModalOpen(true)}
         threads={threads}
         activeThreadId={activeThread.id}
         onSelectThread={(id) => {
@@ -738,9 +837,8 @@ export function App() {
         }}
       />
 
-      {/* Main Content Area: Either Active Thread View OR Secondary Feature View */}
       {activeNav === 'threads' ? (
-        <div className="flex-1 flex min-w-0 h-full overflow-hidden">
+        <div className="flex-1 flex min-w-0 h-full min-h-0 overflow-hidden">
           <CenterThreadView
             lang={lang}
             sidebarCollapsed={sidebarCollapsed}
@@ -751,7 +849,9 @@ export function App() {
             skin={skin}
             activeProject={activeProject}
             projects={projects}
-            onSelectProject={setActiveProjectId}
+            onSelectProject={handleSelectProject}
+            onOpenWorkspaceModal={() => setIsWorkspaceModalOpen(true)}
+            onPickNativeFolder={handlePickNativeFolder}
             thread={activeThread}
             worktrees={worktrees}
             skills={skills}
@@ -853,14 +953,13 @@ export function App() {
             onRespondApproval={handleRespondApproval}
           />
 
-          {/* Collapsible Right Review / Files / Terminal / Browser Drawer */}
           {rightDrawerOpen && (
             <RightInspectorPane
               lang={lang}
               activeTab={rightTab}
               onTabChange={setRightTab}
               onClose={() => setRightDrawerOpen(false)}
-              onRefreshGit={syncLocalEnvironmentAndGit}
+              onRefreshGit={() => syncLocalEnvironmentAndGit(activeProject.repoPath)}
               layoutMode={layoutMode}
               thread={activeThread}
               selectedDiffFile={selectedDiffFile}
@@ -941,23 +1040,24 @@ export function App() {
               }}
               onSubmitInlineReviewToAgent={() => {
                 const allComments = activeThread.changedFiles.flatMap((f) =>
-                  f.comments.map((c) => `[${c.filePath}:${c.lineNumber}] ${c.body}`)
+                  f.comments.map((c) => `${f.filePath}:${c.lineNumber} - ${c.body}`)
                 );
-                if (allComments.length === 0) return;
+                const feedbackPrompt =
+                  allComments.length > 0
+                    ? `请根据以下行内代码审查意见修复代码：\n${allComments.join('\n')}`
+                    : '请审查并优化当前未提交的代码变更。';
                 startStreamingTurnOnThread(
                   activeThread,
-                  lang === 'zh-CN'
-                    ? `请根据以下行级代码评审意见修改代码：\n${allComments.join('\n')}`
-                    : `Please address these inline code review comments:\n${allComments.join('\n')}`,
-                  activeThread.changedFiles.map((f) => f.filePath),
+                  feedbackPrompt,
+                  [],
                   [],
                   'agent'
                 );
               }}
-              onCommitChanges={async (message, push) => {
+              onCommitChanges={async (msg: string, push?: boolean) => {
                 const res = await commitGitChanges(
-                  message,
-                  Boolean(push),
+                  msg,
+                  !!push,
                   activeThread.cwd || activeProject.repoPath
                 );
                 if (res.git) {
@@ -973,11 +1073,11 @@ export function App() {
                 }
                 showToast(
                   res.ok
-                    ? `${i18n.toasts.committedChanges}: "${message}"`
+                    ? `${i18n.toasts.committedChanges}: "${msg}"`
                     : `${res.error || 'Done'}`
                 );
               }}
-              onCreateWorktree={async (branchName) => {
+              onCreateWorktree={async (branchName: string) => {
                 const res = await manageGitWorktree(
                   'create',
                   branchName,
@@ -987,23 +1087,19 @@ export function App() {
                 if (res.git?.worktrees) {
                   setWorktrees(res.git.worktrees);
                 }
-                showToast(`${i18n.toasts.createdWorktree}: ${branchName}`);
+                showToast(`${i18n.toasts.createdWorktree} ${branchName}`);
               }}
-              onMergeWorktree={async (wtId) => {
-                const target = worktrees.find((w) => w.id === wtId);
-                if (!target) return;
-                showToast(`${i18n.toasts.syncedWorktree}: ${target.branch}`);
-              }}
+              onMergeWorktree={() => showToast(i18n.toasts.syncedWorktree)}
             />
           )}
         </div>
       ) : (
         <MainFeatureViews
           lang={lang}
-          onSelectLang={(nextLang) => {
+          onSelectLang={(nextLang: AppLanguage) => {
             setLang(nextLang);
             showToast(
-              `${t(nextLang).toasts.switchedLang} ${
+              `${i18n.toasts.switchedLang} ${
                 nextLang === 'zh-CN' ? '简体中文' : 'English'
               }`
             );
@@ -1011,107 +1107,115 @@ export function App() {
           activeNav={activeNav}
           onBackToThreads={() => setActiveNav('threads')}
           skin={skin}
-          onSelectSkin={(nextSkin) => {
+          onSelectSkin={(nextSkin: ThemeSkin) => {
             setSkin(nextSkin);
-            const meta = SKIN_METAS.find((m) => m.id === nextSkin);
+            const meta = SKIN_METAS.find((s) => s.id === nextSkin);
             showToast(
               `${i18n.toasts.switchedSkin} ${
-                lang === 'zh-CN' ? meta?.nameZh || nextSkin : meta?.nameEn || nextSkin
+                lang === 'zh-CN' ? meta?.nameZh : meta?.nameEn
               }`
             );
           }}
           localCodexStatus={localCodexStatus}
-          onRefreshLocalStatus={() => {
-            syncLocalEnvironmentAndGit();
-            showToast(i18n.toasts.syncedLocal);
-          }}
+          onRefreshLocalStatus={() => syncLocalEnvironmentAndGit(activeProject.repoPath)}
           reviewQueue={reviewQueue}
-          onApproveReviewItem={(id) => {
+          onApproveReviewItem={(id: string) => {
             setReviewQueue((prev) =>
-              prev.map((item) => (item.id === id ? { ...item, status: 'approved' } : item))
+              prev.map((r) => (r.id === id ? { ...r, status: 'approved' } : r))
             );
             showToast(i18n.toasts.approvedReview);
           }}
-          onRejectReviewItem={(id) => {
+          onRejectReviewItem={(id: string) => {
             setReviewQueue((prev) =>
-              prev.map((item) => (item.id === id ? { ...item, status: 'rejected' } : item))
+              prev.map((r) => (r.id === id ? { ...r, status: 'rejected' } : r))
             );
             showToast(i18n.toasts.discardedReview);
           }}
-          onOpenReviewInThread={(item) => {
+          onOpenReviewInThread={(item: ReviewQueueItem) => {
+            if (item.threadId) {
+              setActiveThreadId(item.threadId);
+            }
             setActiveNav('threads');
-            handleCreateNewThread(activeProject.id);
-            showToast(item.title);
+            setRightTab('diff');
+            setRightDrawerOpen(true);
           }}
           skills={skills}
-          onToggleSkill={(id) =>
+          onToggleSkill={(id: string) =>
             setSkills((prev) =>
               prev.map((s) => (s.id === id ? { ...s, enabled: !s.enabled } : s))
             )
           }
-          onSaveSkill={async (updated) => {
-            setSkills((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
-            if (updated.path.startsWith('.codex/')) {
-              await writeWorkspaceFile(updated.path, updated.content);
-            }
+          onSaveSkill={(updatedSkill: SkillDefinition) => {
+            setSkills((prev) =>
+              prev.map((s) => (s.id === updatedSkill.id ? updatedSkill : s))
+            );
           }}
-          onCreateSkill={async (newSkill) => {
-            const created: SkillDefinition = {
-              ...newSkill,
-              id: `sk_${Date.now()}`,
-            };
-            setSkills((prev) => [created, ...prev]);
-            await writeWorkspaceFile(created.path, created.content);
-            showToast(`$${created.slug}`);
+          onCreateSkill={(newSkill: Omit<SkillDefinition, 'id'>) => {
+            const id = `skill_custom_${Date.now()}`;
+            const content = `---\nname: ${newSkill.slug}\ndescription: ${newSkill.description}\n---\n\n# ${newSkill.name}\n\n${newSkill.description}\n`;
+            setSkills((prev) => [
+              {
+                ...newSkill,
+                id,
+                author: 'zhangjinhui',
+                version: '1.0.0',
+                enabled: true,
+                builtIn: false,
+                path: `.codex/skills/${newSkill.slug}/SKILL.md`,
+                content,
+              },
+              ...prev,
+            ]);
+            writeWorkspaceFile(
+              `.codex/skills/${newSkill.slug}/SKILL.md`,
+              content,
+              activeProject.repoPath
+            );
           }}
-          onLaunchSkillThread={(skill) => {
+          onLaunchSkillThread={(skill: SkillDefinition) => {
             setActiveNav('threads');
             startStreamingTurnOnThread(
               activeThread,
-              lang === 'zh-CN'
-                ? `运行技能 $${skill.slug}：${skill.description}`
-                : `Run skill $${skill.slug}: ${skill.description}`,
+              skill.samplePrompt || `Use $${skill.slug} on this repository.`,
               [],
               [skill.slug],
               'agent'
             );
           }}
           automations={automations}
-          onToggleAutomation={(id) =>
+          onToggleAutomation={(id: string) =>
             setAutomations((prev) =>
-              prev.map((a) =>
-                a.id === id
-                  ? { ...a, enabled: !a.enabled }
-                  : a
-              )
+              prev.map((a) => (a.id === id ? { ...a, enabled: !a.enabled } : a))
             )
           }
-          onRunAutomationNow={(id) => {
-            const job = automations.find((a) => a.id === id);
-            if (!job) return;
+          onRunAutomationNow={(id: string) => {
+            const target = automations.find((a) => a.id === id);
+            if (!target) return;
             setActiveNav('threads');
             startStreamingTurnOnThread(
               activeThread,
-              job.prompt,
+              target.prompt,
               [],
-              job.skills,
+              target.skills,
               'agent'
             );
           }}
-          onCreateAutomation={(newJob) => {
-            const created: AutomationJob = {
-              ...newJob,
-              id: `auto_${Date.now()}`,
-              lastRunAt: 'Never',
-              nextRunAt: 'Scheduled',
-              status: 'idle',
-              totalRuns: 0,
-            };
-            setAutomations((prev) => [created, ...prev]);
-            showToast(created.name);
+          onCreateAutomation={(auto) => {
+            setAutomations((prev) => [
+              {
+                ...auto,
+                id: `auto_${Date.now()}`,
+                enabled: true,
+                lastRunAt: '就绪',
+                nextRunAt: '已计划',
+                status: 'idle',
+                totalRuns: 0,
+              },
+              ...prev,
+            ]);
           }}
           worktrees={worktrees}
-          onCreateWorktree={async (branch) => {
+          onCreateWorktree={async (branch: string) => {
             const res = await manageGitWorktree(
               'create',
               branch,
@@ -1121,60 +1225,74 @@ export function App() {
             if (res.git?.worktrees) {
               setWorktrees(res.git.worktrees);
             }
-            showToast(`${i18n.toasts.createdWorktree}: ${branch}`);
+            showToast(`${i18n.toasts.createdWorktree} ${branch}`);
           }}
-          onMergeWorktree={(id) => {
+          onMergeWorktree={() => showToast(i18n.toasts.syncedWorktree)}
+          onDeleteWorktree={async (id: string) => {
             const target = worktrees.find((w) => w.id === id);
-            if (target) showToast(`${i18n.toasts.syncedWorktree}: ${target.branch}`);
-          }}
-          onDeleteWorktree={async (id) => {
-            const target = worktrees.find((w) => w.id === id);
-            if (!target) return;
-            const res = await manageGitWorktree(
-              'remove',
-              target.branch,
-              target.path,
-              activeProject.repoPath
-            );
-            if (res.git?.worktrees) {
-              setWorktrees(res.git.worktrees);
-            } else {
-              setWorktrees((prev) => prev.filter((w) => w.id !== id));
+            if (target) {
+              const res = await manageGitWorktree(
+                'remove',
+                target.branch,
+                target.path,
+                activeProject.repoPath
+              );
+              if (res.git?.worktrees) {
+                setWorktrees(res.git.worktrees);
+              } else {
+                setWorktrees((prev) => prev.filter((w) => w.id !== id));
+              }
+              showToast(`${i18n.toasts.removedWorktree} ${target.branch}`);
             }
-            showToast(`${i18n.toasts.removedWorktree}: ${target.branch}`);
           }}
-          onJumpToWorktreeThread={(wt) => {
-            updateThread(activeThread.id, (th) => ({
-              ...th,
-              worktreeId: wt.id,
-              branch: wt.branch,
-              cwd: wt.path,
-              environmentMode: wt.isMain ? 'local' : 'worktree',
-            }));
+          onJumpToWorktreeThread={(wt: WorktreeInfo) => {
+            if (wt.boundThreadId) {
+              setActiveThreadId(wt.boundThreadId);
+            }
             setActiveNav('threads');
-            showToast(wt.branch);
           }}
           subagents={subagents}
-          onSaveSubagent={(updated) =>
-            setSubagents((prev) => prev.map((a) => (a.id === updated.id ? updated : a)))
+          onSaveSubagent={(updated: SubagentConfig) =>
+            setSubagents((prev) =>
+              prev.map((s) => (s.id === updated.id ? updated : s))
+            )
           }
-          onCreateSubagent={(newAgent) =>
-            setSubagents((prev) => [{ ...newAgent, id: `sub_${Date.now()}` }, ...prev])
+          onCreateSubagent={(sub: Omit<SubagentConfig, 'id'>) =>
+            setSubagents((prev) => [
+              ...prev,
+              {
+                ...sub,
+                id: `sub_${Date.now()}`,
+              },
+            ])
           }
-          agentsMdContent={agentsMdContent}
-          onSaveAgentsMd={async (content) => {
-            setAgentsMdContent(content);
-            await writeWorkspaceFile('AGENTS.md', content);
-            showToast('AGENTS.md');
-          }}
           sandboxPolicy={sandboxPolicy}
-          onUpdateSandboxPolicy={(patch) =>
+          onUpdateSandboxPolicy={(patch: Partial<SandboxPolicy>) =>
             setSandboxPolicy((prev) => ({ ...prev, ...patch }))
           }
+          agentsMdContent={agentsMdContent}
+          onSaveAgentsMd={async (content: string) => {
+            setAgentsMdContent(content);
+            await writeWorkspaceFile('AGENTS.md', content, activeProject.repoPath);
+            showToast(i18n.inspector.saved);
+          }}
         />
       )}
 
-      {/* Command Palette (Cmd+K) */}
+      {/* Workspace Manager Modal (Create / Import / Switch Working Directories) */}
+      <WorkspaceManagerModal
+        lang={lang}
+        isOpen={isWorkspaceModalOpen}
+        onClose={() => setIsWorkspaceModalOpen(false)}
+        projects={projects}
+        activeProjectId={activeProject.id}
+        onSelectProject={handleSelectProject}
+        onCreateWorkspace={handleCreateOrImportWorkspace}
+        onPickNativeFolder={handlePickNativeFolder}
+        onRemoveWorkspace={handleRemoveWorkspace}
+      />
+
+      {/* Command Palette (`Cmd+K`) */}
       <CommandPaletteModal
         lang={lang}
         isOpen={isCommandPaletteOpen}
@@ -1184,13 +1302,13 @@ export function App() {
         worktrees={worktrees}
         onSelectThread={setActiveThreadId}
         onSelectNav={setActiveNav}
-        onCreateNewThread={() => handleCreateNewThread(activeProject.id)}
+        onCreateNewThread={() => handleCreateNewThread()}
         onSpawnParallelAgents={() => setActiveNav('codex_config')}
         onInvokeSkill={(slug) => {
           setActiveNav('threads');
           startStreamingTurnOnThread(
             activeThread,
-            `Run $${slug} on this repository.`,
+            `Use $${slug} on this repository.`,
             [],
             [slug],
             'agent'
@@ -1198,7 +1316,7 @@ export function App() {
         }}
       />
 
-      {/* JSON-RPC 2.0 Lite Inspector Modal */}
+      {/* JSON-RPC 2.0 Protocol Inspector */}
       <RpcInspectorModal
         lang={lang}
         isOpen={isRpcInspectorOpen}
@@ -1212,4 +1330,5 @@ export function App() {
     </div>
   );
 }
+
 export default App;
