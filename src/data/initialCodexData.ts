@@ -9,12 +9,13 @@ import {
   SandboxPolicy,
   JsonRpcLogEntry,
 } from '../types/codex';
+import { DEFAULT_WORKSPACE_PATH, IS_PUBLIC_SITE } from '../services/runtimeConfig';
 
 export const INITIAL_PROJECTS: ProjectWorkspace[] = [
   {
     id: 'proj_codex_desktop',
     name: 'codex-test',
-    repoPath: '/Users/zhangjinhui/Desktop/codex-test',
+    repoPath: DEFAULT_WORKSPACE_PATH,
     defaultBranch: 'main',
     expanded: true,
   },
@@ -26,7 +27,7 @@ export const INITIAL_WORKTREES: WorktreeInfo[] = [
     projectId: 'proj_codex_desktop',
     name: 'codex-test (Local)',
     branch: 'main',
-    path: '/Users/zhangjinhui/Desktop/codex-test',
+    path: DEFAULT_WORKSPACE_PATH,
     headCommit: 'HEAD',
     isMain: true,
     status: 'clean',
@@ -40,7 +41,7 @@ export const INITIAL_WORKTREES: WorktreeInfo[] = [
   },
 ];
 
-const RECENT_TITLES = [
+const RECENT_TITLES: string[] = IS_PUBLIC_SITE ? [] : [
   '部署 Sites 并公开访问',
   '新聊天',
   '确保所有人可见',
@@ -72,7 +73,7 @@ export const INITIAL_THREADS: Thread[] = [
     status: 'completed',
     worktreeId: 'wt_main',
     branch: 'main',
-    cwd: '/Users/zhangjinhui/Desktop/codex-test',
+    cwd: DEFAULT_WORKSPACE_PATH,
     environmentMode: 'local',
     permissionMode: 'full-access',
     daybreakEnabled: false,
@@ -100,7 +101,7 @@ export const INITIAL_THREADS: Thread[] = [
     status: 'completed' as const,
     worktreeId: 'wt_main',
     branch: 'main',
-    cwd: '/Users/zhangjinhui/Desktop/codex-test',
+    cwd: DEFAULT_WORKSPACE_PATH,
     environmentMode: 'local' as const,
     permissionMode: 'full-access' as const,
     daybreakEnabled: false,

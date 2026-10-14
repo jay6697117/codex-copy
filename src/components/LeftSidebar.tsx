@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { DEFAULT_USER_NAME } from '../services/runtimeConfig';
 import {
   Clock,
   Compass,
@@ -300,7 +301,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
               title={`${
                 localCodexStatus?.auth?.email ||
                 localCodexStatus?.auth?.name ||
-                'zhangjinhui'
+                DEFAULT_USER_NAME
               } · 点击打开设置`}
               className="w-7 h-7 rounded-full bg-[#9B7B2C] hover:opacity-90 text-white text-[10px] font-bold flex items-center justify-center shadow-sm"
             >

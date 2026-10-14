@@ -12,6 +12,7 @@ import {
   TurnItem,
   WorktreeInfo,
 } from '../types/codex';
+import { canUseLocalBridge, IS_PUBLIC_SITE } from './runtimeConfig';
 
 const FALLBACK_PORT_BASE = 'http://127.0.0.1:4500';
 
@@ -29,6 +30,16 @@ function isSameOriginAsFallback(): boolean {
 async function fetchWithFallback(pathAndQuery: string, init?: RequestInit): Promise<Response> {
   if (init?.signal?.aborted) {
     throw new DOMException('Aborted', 'AbortError');
+  }
+
+  if (!canUseLocalBridge()) {
+    throw new Error('请先点击顶部的“连接本机服务”。');
+  }
+
+  // A static public Site has no same-origin API; only an explicit connection
+  // may reach the visitor's loopback service.
+  if (IS_PUBLIC_SITE) {
+    return fetch(`${FALLBACK_PORT_BASE}${pathAndQuery}`, init);
   }
 
   const isFileProtocol =

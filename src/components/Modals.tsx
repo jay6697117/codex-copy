@@ -32,6 +32,7 @@ import {
   SubfolderEntry,
 } from '../services/appServerClient';
 import { t } from '../i18n/translations';
+import { DEFAULT_DESKTOP_PATH, DEFAULT_HOME_PATH } from '../services/runtimeConfig';
 
 interface WorkspaceManagerModalProps {
   lang: AppLanguage;
@@ -62,11 +63,11 @@ export const WorkspaceManagerModal: React.FC<WorkspaceManagerModalProps> = ({
   onRemoveWorkspace,
 }) => {
   const [tab, setTab] = useState<'create' | 'browse' | 'manage'>('create');
-  const [parentDir, setParentDir] = useState('/Users/zhangjinhui/Desktop');
+  const [parentDir, setParentDir] = useState(DEFAULT_DESKTOP_PATH);
   const [folderName, setFolderName] = useState('');
   const [initGit, setInitGit] = useState(true);
-  const [browseDir, setBrowseDir] = useState('/Users/zhangjinhui/Desktop');
-  const [browseParentDir, setBrowseParentDir] = useState('/Users/zhangjinhui');
+  const [browseDir, setBrowseDir] = useState(DEFAULT_DESKTOP_PATH);
+  const [browseParentDir, setBrowseParentDir] = useState(DEFAULT_HOME_PATH);
   const [subfolders, setSubfolders] = useState<SubfolderEntry[]>([]);
   const [loading, setLoading] = useState(false);
 
@@ -77,6 +78,7 @@ export const WorkspaceManagerModal: React.FC<WorkspaceManagerModalProps> = ({
         setBrowseDir(res.currentDir);
         setBrowseParentDir(res.parentDir);
         setSubfolders(res.folders);
+        setParentDir((previous) => previous || res.currentDir);
       }
     });
   }, [isOpen, browseDir]);
@@ -89,7 +91,7 @@ export const WorkspaceManagerModal: React.FC<WorkspaceManagerModalProps> = ({
     setLoading(true);
     try {
       await onCreateWorkspace({
-        parentDir: parentDir.trim() || '/Users/zhangjinhui/Desktop',
+        parentDir: parentDir.trim() || undefined,
         folderName: folderName.trim(),
         initGit,
       });
@@ -195,19 +197,19 @@ export const WorkspaceManagerModal: React.FC<WorkspaceManagerModalProps> = ({
                   type="text"
                   value={parentDir}
                   onChange={(e) => setParentDir(e.target.value)}
-                  placeholder="/Users/zhangjinhui/Desktop"
+                  placeholder={DEFAULT_DESKTOP_PATH || '连接本机服务后选择目录'}
                   className="flex-1 px-3 py-2 rounded-xl bg-[#141416] border border-white/10 text-xs font-mono text-white focus:outline-none focus:border-[#2B7FFF]"
                 />
                 <button
                   type="button"
-                  onClick={() => setParentDir('/Users/zhangjinhui/Desktop')}
+                  onClick={() => setParentDir(DEFAULT_DESKTOP_PATH || browseDir)}
                   className="px-2.5 py-2 rounded-xl bg-white/[0.06] hover:bg-white/10 text-xs text-[#A1A1A6] hover:text-white"
                 >
                   桌面 (Desktop)
                 </button>
                 <button
                   type="button"
-                  onClick={() => setParentDir('/Users/zhangjinhui')}
+                  onClick={() => setParentDir(DEFAULT_HOME_PATH || browseParentDir)}
                   className="px-2.5 py-2 rounded-xl bg-white/[0.06] hover:bg-white/10 text-xs text-[#A1A1A6] hover:text-white"
                 >
                   主目录 (~)

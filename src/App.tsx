@@ -62,6 +62,13 @@ import {
   WorkspaceManagerModal,
 } from './components/Modals';
 import { t, SKIN_METAS } from './i18n/translations';
+import {
+  canUseLocalBridge,
+  DEFAULT_HOME_PATH,
+  DEFAULT_USER_NAME,
+  IS_PUBLIC_SITE,
+  setLocalBridgeAccess,
+} from './services/runtimeConfig';
 
 const VALID_SKINS: ThemeSkin[] = ['codex', 'wechat', 'qq', 'dingtalk'];
 const VALID_LANGS: AppLanguage[] = ['zh-CN', 'en-US'];
@@ -119,6 +126,9 @@ export function App() {
   const [isRpcInspectorOpen, setIsRpcInspectorOpen] = useState<boolean>(false);
   const [isWorkspaceModalOpen, setIsWorkspaceModalOpen] = useState<boolean>(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [bridgeConnecting, setBridgeConnecting] = useState(false);
+  const [bridgeConnected, setBridgeConnected] = useState(false);
+  const [bridgeError, setBridgeError] = useState('');
 
   const activeTurnInterruptRef = useRef<Record<string, () => void>>({});
 
@@ -145,6 +155,7 @@ export function App() {
 
   // Sync Local Machine Codex Status, Workspaces, ~/.codex/sessions, ~/.codex/skills, and live Git diffs
   const syncLocalEnvironmentAndGit = async (overrideCwd?: string) => {
+    if (!canUseLocalBridge()) return;
     const targetCwd = overrideCwd || activeProject?.repoPath;
     const [wsData, codexStatus, gitState, tree, agentsMd] = await Promise.all([
       fetchWorkspaces(),
@@ -275,6 +286,7 @@ export function App() {
   };
 
   useEffect(() => {
+    if (IS_PUBLIC_SITE) return;
     checkAppServerHealth().then(() => {
       sendJsonRpcRequest(
         'initialize',
@@ -292,6 +304,42 @@ export function App() {
 
     syncLocalEnvironmentAndGit();
   }, []);
+
+  const handleConnectLocalBridge = async () => {
+    if (bridgeConnecting) return;
+    setBridgeConnecting(true);
+    setBridgeError('');
+    setLocalBridgeAccess(true);
+    try {
+      const health = await checkAppServerHealth();
+      if (!health.connected) {
+        throw new Error('连接失败：请启动本机服务，并允许浏览器访问本地网络后重试。');
+      }
+      const workspaceData = await fetchWorkspaces();
+      const workspace = workspaceData?.workspaces[0];
+      if (!workspace) {
+        throw new Error('本机服务尚未返回工作目录，请在本机应用中添加项目后重试。');
+      }
+      setProjects(workspaceData.workspaces);
+      setActiveProjectId(workspace.id);
+      setThreads((previous) => previous.map((thread) => ({
+        ...thread,
+        projectId: workspace.id,
+        cwd: workspace.repoPath,
+      })));
+      await sendJsonRpcRequest('initialize', {
+        clientInfo: { name: 'codex_web', title: 'Codex 工作台', version: '1.0.0' },
+        capabilities: { experimentalApi: true },
+      }, appendRpcLog);
+      await syncLocalEnvironmentAndGit(workspace.repoPath);
+      setBridgeConnected(true);
+    } catch (error) {
+      setLocalBridgeAccess(false);
+      setBridgeError(error instanceof Error ? error.message : '无法连接本机服务。');
+    } finally {
+      setBridgeConnecting(false);
+    }
+  };
 
   // Switch active workspace project and sync its directory, file tree & git status
   const handleSelectProject = async (projectId: string) => {
@@ -444,6 +492,10 @@ export function App() {
     mode: ComposerMode = 'agent',
     goalObjective?: string
   ) => {
+    if (!canUseLocalBridge() || (IS_PUBLIC_SITE && !bridgeConnected)) {
+      showToast('请先点击顶部的“连接本机服务”，再发送任务。');
+      return;
+    }
     const turnId = `turn_${Date.now().toString(36)}`;
     const nowTime = new Date().toTimeString().split(' ')[0];
 
@@ -652,6 +704,10 @@ export function App() {
     mode?: ComposerMode;
     goalObjective?: string;
   }) => {
+    if (!canUseLocalBridge() || (IS_PUBLIC_SITE && !bridgeConnected)) {
+      showToast('请先点击顶部的“连接本机服务”，再发送任务。');
+      return;
+    }
     let targetThread = {
       ...activeThread,
       projectId: activeProject.id,
@@ -665,7 +721,7 @@ export function App() {
       const wtId = `wt_${Date.now()}`;
       const wtPath =
         wtRes.worktreePath ||
-        `/Users/zhangjinhui/.codex/worktrees/${activeProject.name}/task-${slug}`;
+        `${DEFAULT_HOME_PATH}/.codex/worktrees/${activeProject.name}/task-${slug}`;
 
       if (wtRes.git?.worktrees) {
         setWorktrees(wtRes.git.worktrees);
@@ -810,7 +866,35 @@ export function App() {
   };
 
   return (
-    <div className="h-screen w-screen overflow-hidden flex codex-app-bg">
+    <div className="h-screen w-screen overflow-hidden flex flex-col codex-app-bg">
+      {IS_PUBLIC_SITE && (
+        <aside className="shrink-0 border-b codex-border px-4 py-3 flex flex-wrap items-center gap-3 text-xs codex-text-primary">
+          <div className="flex-1 min-w-0" role="status">
+            <p className="font-semibold">{bridgeConnected ? '已连接你的本机 Codex 服务' : 'Codex 网页工作台'}</p>
+            <p className="mt-1 codex-text-secondary">
+              {bridgeError || (bridgeConnected
+                ? '文件、终端和任务在你的电脑上运行。刷新页面会断开连接。'
+                : '执行任务需连接你自己的电脑。请先在项目目录运行 npm run server，再连接本机服务。')}
+            </p>
+          </div>
+          <button
+            type="button"
+            disabled={bridgeConnecting}
+            onClick={() => {
+              if (bridgeConnected) {
+                setLocalBridgeAccess(false);
+                window.location.reload();
+              } else {
+                void handleConnectLocalBridge();
+              }
+            }}
+            className="shrink-0 rounded-lg px-3 py-2 codex-accent-btn text-white disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
+          >
+            {bridgeConnecting ? '正在连接…' : bridgeConnected ? '断开连接' : '连接本机服务'}
+          </button>
+        </aside>
+      )}
+      <div className="flex flex-1 min-h-0 overflow-hidden">
       {toastMessage && (
         <div className="fixed bottom-5 right-5 z-50 px-3.5 py-2 rounded-xl codex-elevated border codex-border text-xs font-medium codex-text-primary shadow-2xl flex items-center gap-2">
           <span className="w-2 h-2 rounded-full codex-accent-btn animate-pulse" />
@@ -1057,7 +1141,7 @@ export function App() {
                               filePath,
                               lineNumber,
                               side: 'new',
-                              author: localCodexStatus?.auth?.name || 'zhangjinhui',
+                              author: localCodexStatus?.auth?.name || DEFAULT_USER_NAME,
                               body,
                               createdAt: lang === 'zh-CN' ? '刚刚' : 'Just now',
                             },
@@ -1186,7 +1270,7 @@ export function App() {
               {
                 ...newSkill,
                 id,
-                author: 'zhangjinhui',
+                author: localCodexStatus?.auth?.name || DEFAULT_USER_NAME,
                 version: '1.0.0',
                 enabled: true,
                 builtIn: false,
@@ -1356,6 +1440,7 @@ export function App() {
           sendJsonRpcRequest(method, params, appendRpcLog)
         }
       />
+      </div>
     </div>
   );
 }

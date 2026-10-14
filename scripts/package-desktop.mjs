@@ -64,11 +64,75 @@ function makePngChunk(type, data) {
   return Buffer.concat([len, typeBuf, data, crcBuf]);
 }
 
-function generateAppIconPng(size = 512) {
+// Icon design: blue squircle tile (matches UI accent #2B7FFF) with a white `>_` prompt
+// and an AI sparkle. Rendered from signed distance fields for crisp anti-aliased edges.
+const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
+const mix = (a, b, t) => a + (b - a) * t;
+function smoothstep(e0, e1, v) {
+  const t = clamp01((v - e0) / (e1 - e0));
+  return t * t * (3 - 2 * t);
+}
+
+// macOS-style continuous-corner squircle (superellipse, n = 5)
+function sdSquircle(x, y, half) {
+  const ax = Math.abs(x) / half;
+  const ay = Math.abs(y) / half;
+  const x4 = ax * ax * ax * ax;
+  const y4 = ay * ay * ay * ay;
+  const norm = Math.pow(x4 * ax + y4 * ay, 0.2);
+  if (norm < 1e-6) return -half;
+  const grad = Math.sqrt(x4 * x4 + y4 * y4) / (norm * norm * norm * norm);
+  return ((norm - 1) * half) / grad;
+}
+
+function sdCapsule(x, y, ax, ay, bx, by, r) {
+  const pax = x - ax;
+  const pay = y - ay;
+  const bax = bx - ax;
+  const bay = by - ay;
+  const h = clamp01((pax * bax + pay * bay) / (bax * bax + bay * bay));
+  return Math.hypot(pax - bax * h, pay - bay * h) - r;
+}
+
+// Four-point sparkle: a square with a circle carved out of each corner
+function sdSparkle(x, y, cx, cy, r) {
+  const qx = Math.abs(x - cx);
+  const qy = Math.abs(y - cy);
+  return Math.max(Math.max(qx - r, qy - r), r - Math.hypot(qx - r, qy - r));
+}
+
+// `>_` prompt + sparkle. Small sizes drop the sparkle (it degrades into a "+") and use bolder strokes.
+function sdGlyph(x, y, simple) {
+  const k = 1.08;
+  if (simple) x -= 0.03;
+  x /= k;
+  y /= k;
+  const w = simple ? 0.046 : 0.036;
+  const chevron = Math.min(
+    sdCapsule(x, y, -0.215, -0.13, -0.06, 0, w),
+    sdCapsule(x, y, -0.06, 0, -0.215, 0.13, w)
+  );
+  const cursor = sdCapsule(x, y, 0, 0.13, 0.17, 0.13, w);
+  if (simple) return Math.min(chevron, cursor) * k;
+  return Math.min(chevron, cursor, sdSparkle(x, y, 0.135, -0.11, 0.088)) * k;
+}
+
+const ICON_GRADIENT = [
+  [94, 182, 255], // #5EB6FF top-left
+  [43, 127, 255], // #2B7FFF
+  [37, 70, 224], // #2546E0 bottom-right
+];
+
+/**
+ * @param size  Output edge length in px.
+ * @param bodyHalf  Tile half-width relative to canvas. 0.4023 = Apple's 824/1024 grid (macOS);
+ *                  Windows icons use a larger tile without drop shadow.
+ */
+function generateAppIconPng(size = 512, { bodyHalf = 0.4023, dropShadow = true } = {}) {
   const rawData = Buffer.alloc(size * (size * 4 + 1));
-  const center = size / 2;
-  const radius = size * 0.44;
-  const cornerRadius = size * 0.22;
+  const pixel = 1 / size;
+  const glyphScale = bodyHalf / 0.4023;
+  const simple = size <= 32;
 
   for (let y = 0; y < size; y++) {
     const rowStart = y * (size * 4 + 1);
@@ -76,74 +140,53 @@ function generateAppIconPng(size = 512) {
 
     for (let x = 0; x < size; x++) {
       const px = rowStart + 1 + x * 4;
+      const nx = (x + 0.5) / size - 0.5;
+      const ny = (y + 0.5) / size - 0.5;
 
-      // Rounded squircle distance
-      const dx = Math.max(Math.abs(x - center) - (radius - cornerRadius), 0);
-      const dy = Math.max(Math.abs(y - center) - (radius - cornerRadius), 0);
-      const dist = Math.sqrt(dx * dx + dy * dy);
+      const bodyA = clamp01(0.5 - sdSquircle(nx, ny, bodyHalf) / pixel);
+      const shadowA = dropShadow
+        ? 0.32 * (1 - smoothstep(-0.012, 0.022, sdSquircle(nx, ny - 0.012, bodyHalf)))
+        : 0;
 
-      if (dist > cornerRadius) {
-        rawData[px] = 0;
-        rawData[px + 1] = 0;
-        rawData[px + 2] = 0;
-        rawData[px + 3] = 0;
-        continue;
+      let r = 0;
+      let g = 0;
+      let b = 0;
+      if (bodyA > 0) {
+        // Diagonal three-stop gradient
+        const t = clamp01(0.5 + (0.8 * ny + 0.3 * nx) / (2 * bodyHalf));
+        const [from, to] = t < 0.5 ? [ICON_GRADIENT[0], ICON_GRADIENT[1]] : [ICON_GRADIENT[1], ICON_GRADIENT[2]];
+        const k = t < 0.5 ? t * 2 : t * 2 - 1;
+        r = mix(from[0], to[0], k);
+        g = mix(from[1], to[1], k);
+        b = mix(from[2], to[2], k);
+
+        // Soft top-left sheen
+        const sheen = 0.18 * (1 - smoothstep(0, 0.62, Math.hypot(nx + 0.16, ny + 0.42)));
+        r = mix(r, 255, sheen);
+        g = mix(g, 255, sheen);
+        b = mix(b, 255, sheen);
+
+        // Glyph drop shadow, then white glyph
+        const gx = nx / glyphScale;
+        const gy = ny / glyphScale;
+        const glyphShadow = 0.28 * (1 - smoothstep(-0.01, 0.024, sdGlyph(gx, gy - 0.014, simple)));
+        r = mix(r, 10, glyphShadow);
+        g = mix(g, 28, glyphShadow);
+        b = mix(b, 90, glyphShadow);
+
+        const glyphA = clamp01(0.5 - (sdGlyph(gx, gy, simple) * glyphScale) / pixel);
+        r = mix(r, 255, glyphA);
+        g = mix(g, 255, glyphA);
+        b = mix(b, 255, glyphA);
       }
 
-      // Smooth anti-aliased edge
-      const alpha = dist > cornerRadius - 1.5 ? Math.max(0, Math.min(255, Math.round((cornerRadius - dist) * 170))) : 255;
-
-      // Deep Navy-Emerald background gradient (#0D1520 -> #122436)
-      const ny = y / size;
-      const nx = x / size;
-      let r = Math.round(14 + ny * 12);
-      let g = Math.round(24 + ny * 26);
-      let b = Math.round(38 + ny * 34);
-
-      // Subtle inner border glow
-      if (dist > cornerRadius - size * 0.025) {
-        r = Math.min(255, r + 25);
-        g = Math.min(255, g + 85);
-        b = Math.min(255, b + 65);
-      }
-
-      // Draw `>` chevron on left center and `_` cursor bar on right center (WeChat Green #07C160 / Cyan highlight)
-      const relX = (x - center) / radius;
-      const relY = (y - center) / radius;
-
-      // Chevron `>`: two diagonal segments meeting at (-0.05, 0.0)
-      const dChevronTop = Math.abs(relY - (0.55 * (relX + 0.05))) / Math.sqrt(1 + 0.55 * 0.55);
-      const dChevronBot = Math.abs(relY - (-0.55 * (relX + 0.05))) / Math.sqrt(1 + 0.55 * 0.55);
-      const inChevronBounds = relX >= -0.52 && relX <= -0.02 && Math.abs(relY) <= 0.32;
-      const isChevron = inChevronBounds && (dChevronTop < 0.075 || dChevronBot < 0.075);
-
-      // Underscore `_`: horizontal bar at bottom right
-      const isUnderscore =
-        relX >= 0.08 && relX <= 0.52 && relY >= 0.16 && relY <= 0.28;
-
-      // Target ring dot at top right (representing `/goal` mode)
-      const ringDist = Math.sqrt(Math.pow(relX - 0.34, 2) + Math.pow(relY + 0.24, 2));
-      const isGoalRing = (ringDist >= 0.09 && ringDist <= 0.145) || ringDist <= 0.045;
-
-      if (isChevron || isUnderscore) {
-        r = 7;
-        g = 193;
-        b = 96; // #07C160
-      } else if (isGoalRing) {
-        r = 0;
-        g = 153;
-        b = 255; // #0099FF
-      } else if (nx + ny < 0.8) {
-        // Subtle top-left sheen
-        r += 4;
-        g += 6;
-        b += 10;
-      }
-
-      rawData[px] = r;
-      rawData[px + 1] = g;
-      rawData[px + 2] = b;
-      rawData[px + 3] = alpha;
+      // Composite tile over its drop shadow (straight alpha)
+      const alpha = bodyA + shadowA * (1 - bodyA);
+      if (alpha <= 0) continue;
+      rawData[px] = Math.round((r * bodyA) / alpha);
+      rawData[px + 1] = Math.round((g * bodyA) / alpha);
+      rawData[px + 2] = Math.round((b * bodyA) / alpha);
+      rawData[px + 3] = Math.round(alpha * 255);
     }
   }
 
@@ -620,26 +663,17 @@ function generateMacIcns(entries) {
   return Buffer.concat([fileHdr, ...blocks]);
 }
 
-async function main() {
-  console.log('==========================================================');
-  console.log(' OpenAI Codex Desktop — macOS & Windows Dual-OS Packager');
-  console.log('==========================================================\n');
-
-  // Step 1: Build Production Frontend (`tsc -b && vite build`)
-  console.log('[1/4] Building production TypeScript & Vite frontend (`dist/`)...');
-  runCmd('npm run build');
-
-  // Step 2: Generate Icons (`build/icon.png`, `build/icon.icns`, `build/icon.ico`)
-  console.log('\n[2/4] Generating macOS (.icns) & Windows (.ico) application icons...');
+async function writeAppIcons() {
   await fs.mkdir(BUILD_DIR, { recursive: true });
   const png1024 = generateAppIconPng(1024);
   const png512 = generateAppIconPng(512);
   const png256 = generateAppIconPng(256);
   const png128 = generateAppIconPng(128);
   const png64 = generateAppIconPng(64);
-  const png48 = generateAppIconPng(48);
   const png32 = generateAppIconPng(32);
-  const png16 = generateAppIconPng(16);
+
+  // Windows icons fill more of the canvas and skip the macOS drop shadow
+  const winIcon = (size) => generateAppIconPng(size, { bodyHalf: 0.47, dropShadow: false });
 
   const iconPngPath = path.join(BUILD_DIR, 'icon.png');
   const iconIcoPath = path.join(BUILD_DIR, 'icon.ico');
@@ -649,11 +683,11 @@ async function main() {
   await fs.writeFile(
     iconIcoPath,
     generateWindowsIco([
-      { size: 256, buf: png256 },
-      { size: 64, buf: png64 },
-      { size: 48, buf: png48 },
-      { size: 32, buf: png32 },
-      { size: 16, buf: png16 },
+      { size: 256, buf: winIcon(256) },
+      { size: 64, buf: winIcon(64) },
+      { size: 48, buf: winIcon(48) },
+      { size: 32, buf: winIcon(32) },
+      { size: 16, buf: winIcon(16) },
     ])
   );
 
@@ -668,6 +702,22 @@ async function main() {
       { type: 'ic10', buf: png1024 },
     ])
   );
+
+  return { iconPngPath, iconIcoPath, iconIcnsPath };
+}
+
+async function main() {
+  console.log('==========================================================');
+  console.log(' OpenAI Codex Desktop — macOS & Windows Dual-OS Packager');
+  console.log('==========================================================\n');
+
+  // Step 1: Build Production Frontend (`tsc -b && vite build`)
+  console.log('[1/4] Building production TypeScript & Vite frontend (`dist/`)...');
+  runCmd('npm run build');
+
+  // Step 2: Generate Icons (`build/icon.png`, `build/icon.icns`, `build/icon.ico`)
+  console.log('\n[2/4] Generating macOS (.icns) & Windows (.ico) application icons...');
+  const { iconIcoPath, iconIcnsPath } = await writeAppIcons();
 
   // Clean and prepare release directory
   await fs.rm(RELEASE_DIR, { recursive: true, force: true });
@@ -891,7 +941,12 @@ if ($EdgeExe) {
   console.log('==========================================================');
 }
 
-main().catch((err) => {
+// `--icons-only`: regenerate `build/icon.*` without building or packaging
+const entry = process.argv.includes('--icons-only')
+  ? writeAppIcons().then((paths) => console.log('Icons written:', Object.values(paths).join(', ')))
+  : main();
+
+entry.catch((err) => {
   console.error('Packaging failed:', err);
   process.exit(1);
 });

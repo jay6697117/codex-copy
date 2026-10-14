@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { DEFAULT_WORKSPACE_PATH } from '../services/runtimeConfig';
 import {
   FileDiff as FileDiffIcon,
   FolderTree,
@@ -691,7 +692,7 @@ export const RightInspectorPane: React.FC<RightInspectorPaneProps> = ({
                 @Browser · {thread.branch}
               </span>
               <span className="text-xs font-mono codex-text-muted">
-                {thread.cwd || '/Users/zhangjinhui/Desktop/codex-test'}
+                {thread.cwd || DEFAULT_WORKSPACE_PATH || '连接本机服务后选择目录'}
               </span>
             </div>
             <h3 className="text-sm font-semibold codex-text-primary">
