@@ -1,5 +1,14 @@
 # Sites 公开部署核查
 
+## 当前复发核查：`sites-public-republish-20261014`
+
+- 实时 `get_site` 返回原站点 `active`、`access_mode=public`；版本 1 部署状态为 `succeeded`。
+- 主仓库提交 `9eaf340` 比 Sites 源码提交 `7ac3f7e2cc06cd7ba9da1128e168c8928c09c02d` 更新，网页差异仅为 `src/App.tsx` 的连接说明改为先安装桌面版 APP。
+- Sites 副本 `package.json` 的 `build` 带 `--mode sites`，必须保留；当前公开静态资源和其余应用源码一致。
+- 浏览器中原站点正常展示，仍显示旧的 `npm run server` 提示；需要新版发布。
+
+## 历史记录
+
 任务：`01a13985-1358-7571-8d6b-3ba6d27cd84c`；核查日期：2026-10-14。
 
 - 本地项目为 `codex-desktop-app`，使用 React、TypeScript、Vite、Electron 和本机 Node 后台。
