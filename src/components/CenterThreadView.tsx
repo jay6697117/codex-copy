@@ -1248,7 +1248,7 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
                   >
                     <span className="font-mono codex-accent-text">${skill.slug}</span>
                     <span className="text-[10px] codex-text-muted truncate max-w-[150px]">
-                      {skill.scope}
+                      {skill.path}
                     </span>
                   </button>
                 ))}

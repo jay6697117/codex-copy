@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
+  AppLanguage,
   AutomationJob,
   ComposerMode,
   FileDiff,
@@ -51,27 +52,35 @@ import { CenterThreadView } from './components/CenterThreadView';
 import { RightInspectorPane } from './components/RightInspectorPane';
 import { MainFeatureViews } from './components/MainFeatureViews';
 import { CommandPaletteModal, RpcInspectorModal } from './components/Modals';
+import { t, SKIN_METAS } from './i18n/translations';
 
-const SKIN_CYCLE: ThemeSkin[] = ['codex-dark', 'macos-light', 'aurora-midnight'];
+const VALID_SKINS: ThemeSkin[] = ['wechat', 'qq', 'dingtalk'];
+const VALID_LANGS: AppLanguage[] = ['zh-CN', 'en-US'];
 
 export function App() {
-  // 3-Skin One-Click Theme State
-  const [skin, setSkin] = useState<ThemeSkin>(() => {
-    const saved = localStorage.getItem('codex_desktop_skin') as ThemeSkin | null;
-    return saved && SKIN_CYCLE.includes(saved) ? saved : 'codex-dark';
+  // 1. Default Simplified Chinese (`zh-CN`), switchable to English (`en-US`) in Settings
+  const [lang, setLang] = useState<AppLanguage>(() => {
+    const saved = localStorage.getItem('codex_desktop_lang_v2') as AppLanguage | null;
+    return saved && VALID_LANGS.includes(saved) ? saved : 'zh-CN';
   });
+
+  // 2. Default WeChat Skin (`wechat`), switchable to QQ (`qq`) and DingTalk (`dingtalk`) in Settings
+  const [skin, setSkin] = useState<ThemeSkin>(() => {
+    const saved = localStorage.getItem('codex_desktop_skin_v2') as ThemeSkin | null;
+    return saved && VALID_SKINS.includes(saved) ? saved : 'wechat';
+  });
+
+  const i18n = t(lang);
 
   useEffect(() => {
     document.documentElement.setAttribute('data-skin', skin);
-    localStorage.setItem('codex_desktop_skin', skin);
+    localStorage.setItem('codex_desktop_skin_v2', skin);
   }, [skin]);
 
-  const handleCycleSkin = () => {
-    setSkin((prev) => {
-      const nextIdx = (SKIN_CYCLE.indexOf(prev) + 1) % SKIN_CYCLE.length;
-      return SKIN_CYCLE[nextIdx];
-    });
-  };
+  useEffect(() => {
+    document.documentElement.setAttribute('lang', lang);
+    localStorage.setItem('codex_desktop_lang_v2', lang);
+  }, [lang]);
 
   // Layout & Navigation State
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(false);
@@ -184,8 +193,8 @@ export function App() {
         }));
 
         setThreads((prev) => {
-          const existingIds = new Set(prev.map((t) => t.id));
-          const fresh = importedThreads.filter((t) => !existingIds.has(t.id));
+          const existingIds = new Set(prev.map((th) => th.id));
+          const fresh = importedThreads.filter((th) => !existingIds.has(th.id));
           return [...prev, ...fresh];
         });
       }
@@ -194,7 +203,7 @@ export function App() {
       const configuredModel = codexStatus.config?.effective?.model;
       if (configuredModel) {
         setThreads((prev) =>
-          prev.map((t, idx) => (idx === 0 ? { ...t, model: configuredModel } : t))
+          prev.map((th, idx) => (idx === 0 ? { ...th, model: configuredModel } : th))
         );
       }
     }
@@ -203,17 +212,17 @@ export function App() {
       if (gitState.worktrees && gitState.worktrees.length > 0) {
         setWorktrees(gitState.worktrees);
       }
-      if (gitState.changedFiles && gitState.changedFiles.length > 0) {
+      if (gitState.changedFiles) {
         setThreads((prev) =>
-          prev.map((t, idx) =>
+          prev.map((th, idx) =>
             idx === 0
               ? {
-                  ...t,
-                  branch: gitState.branch || t.branch,
+                  ...th,
+                  branch: gitState.branch || th.branch,
                   changedFiles: gitState.changedFiles,
                   diffSummary: gitState.diffSummary,
                 }
-              : t
+              : th
           )
         );
         if (!selectedDiffFile && gitState.changedFiles[0]) {
@@ -267,7 +276,7 @@ export function App() {
   );
 
   const activeThread = useMemo(
-    () => threads.find((t) => t.id === activeThreadId) || threads[0],
+    () => threads.find((th) => th.id === activeThreadId) || threads[0],
     [threads, activeThreadId]
   );
 
@@ -296,8 +305,8 @@ export function App() {
     (r) => r.status === 'pending_review'
   ).length;
 
-  const updateThread = (threadId: string, updater: (t: Thread) => Thread) => {
-    setThreads((prev) => prev.map((t) => (t.id === threadId ? updater(t) : t)));
+  const updateThread = (threadId: string, updater: (th: Thread) => Thread) => {
+    setThreads((prev) => prev.map((th) => (th.id === threadId ? updater(th) : th)));
   };
 
   // Start a real streaming turn via the local Codex CLI bridge
@@ -306,7 +315,8 @@ export function App() {
     prompt: string,
     attachedFiles: string[] = [],
     invokedSkills: string[] = [],
-    mode: ComposerMode = 'agent'
+    mode: ComposerMode = 'agent',
+    goalObjective?: string
   ) => {
     const turnId = `turn_${Date.now().toString(36)}`;
     const nowTime = new Date().toTimeString().split(' ')[0];
@@ -332,15 +342,15 @@ export function App() {
       items: [userItem],
     };
 
-    updateThread(targetThread.id, (t) => ({
-      ...t,
+    updateThread(targetThread.id, (th) => ({
+      ...th,
       title:
-        t.turns.length === 0 || t.title === 'New thread'
+        th.turns.length === 0 || th.title === 'New thread' || th.title === '新建会话'
           ? prompt.slice(0, 56)
-          : t.title,
+          : th.title,
       status: 'running',
-      updatedAt: 'Just now',
-      turns: [...t.turns, newTurn],
+      updatedAt: lang === 'zh-CN' ? '刚刚' : 'Just now',
+      turns: [...th.turns, newTurn],
     }));
 
     sendJsonRpcRequest(
@@ -353,6 +363,10 @@ export function App() {
       },
       appendRpcLog
     );
+
+    const activeGoal =
+      goalObjective ||
+      (targetThread.goal?.status === 'active' ? targetThread.goal.objective : undefined);
 
     const controller = runInteractiveAgentTurn({
       threadId: targetThread.id,
@@ -368,26 +382,27 @@ export function App() {
       worktreeBranch: targetThread.branch,
       cwd: targetThread.cwd || activeProject.repoPath,
       mode,
+      activeGoal,
       sandboxPolicy: {
         ...sandboxPolicy,
         mode: (targetThread.permissionMode as any) || sandboxPolicy.mode,
       },
       callbacks: {
         onCliThreadStarted: (cliSessionId) => {
-          updateThread(targetThread.id, (t) => ({ ...t, cliSessionId }));
+          updateThread(targetThread.id, (th) => ({ ...th, cliSessionId }));
         },
         onItemAdded: (item) => {
-          updateThread(targetThread.id, (t) => ({
-            ...t,
-            turns: t.turns.map((tr) =>
+          updateThread(targetThread.id, (th) => ({
+            ...th,
+            turns: th.turns.map((tr) =>
               tr.id === turnId ? { ...tr, items: [...tr.items, item] } : tr
             ),
           }));
         },
         onItemUpdated: (itemId, itemUpdater) => {
-          updateThread(targetThread.id, (t) => ({
-            ...t,
-            turns: t.turns.map((tr) =>
+          updateThread(targetThread.id, (th) => ({
+            ...th,
+            turns: th.turns.map((tr) =>
               tr.id === turnId
                 ? {
                     ...tr,
@@ -398,16 +413,16 @@ export function App() {
           }));
         },
         onDiffGenerated: (fileDiff) => {
-          updateThread(targetThread.id, (t) => {
-            const existingIdx = t.changedFiles.findIndex(
+          updateThread(targetThread.id, (th) => {
+            const existingIdx = th.changedFiles.findIndex(
               (f) => f.filePath === fileDiff.filePath
             );
             const nextFiles =
               existingIdx >= 0
-                ? t.changedFiles.map((f, idx) => (idx === existingIdx ? fileDiff : f))
-                : [fileDiff, ...t.changedFiles];
+                ? th.changedFiles.map((f, idx) => (idx === existingIdx ? fileDiff : f))
+                : [fileDiff, ...th.changedFiles];
             return {
-              ...t,
+              ...th,
               changedFiles: nextFiles,
               diffSummary: {
                 files: nextFiles.length,
@@ -423,13 +438,11 @@ export function App() {
             setWorktrees(gitState.worktrees);
           }
           if (gitState.changedFiles) {
-            updateThread(targetThread.id, (t) => ({
-              ...t,
-              branch: gitState.branch || t.branch,
-              changedFiles:
-                gitState.changedFiles.length > 0 ? gitState.changedFiles : t.changedFiles,
-              diffSummary:
-                gitState.changedFiles.length > 0 ? gitState.diffSummary : t.diffSummary,
+            updateThread(targetThread.id, (th) => ({
+              ...th,
+              branch: gitState.branch || th.branch,
+              changedFiles: gitState.changedFiles,
+              diffSummary: gitState.diffSummary,
             }));
             if (gitState.changedFiles[0]) {
               setSelectedDiffFile(gitState.changedFiles[0].filePath);
@@ -437,16 +450,16 @@ export function App() {
           }
         },
         onTurnStatusChange: (status, tokenUsageText) => {
-          updateThread(targetThread.id, (t) => ({
-            ...t,
+          updateThread(targetThread.id, (th) => ({
+            ...th,
             status:
               status === 'waiting_approval'
                 ? 'waiting_approval'
                 : status === 'in_progress'
                 ? 'running'
                 : 'completed',
-            tokenUsage: tokenUsageText || t.tokenUsage,
-            turns: t.turns.map((tr) => (tr.id === turnId ? { ...tr, status } : tr)),
+            tokenUsage: tokenUsageText || th.tokenUsage,
+            turns: th.turns.map((tr) => (tr.id === turnId ? { ...tr, status } : tr)),
           }));
         },
         onRpcLog: appendRpcLog,
@@ -467,7 +480,7 @@ export function App() {
     const newThread: Thread = {
       id: `thr_${Date.now()}`,
       projectId: targetProjId,
-      title: 'New thread',
+      title: lang === 'zh-CN' ? '新建会话' : 'New thread',
       pinned: false,
       status: 'completed',
       worktreeId: 'wt_main',
@@ -479,11 +492,12 @@ export function App() {
       personality: 'pragmatic',
       reasoningEffort: defaultEffort,
       subagent: 'default',
-      updatedAt: 'Now',
+      updatedAt: lang === 'zh-CN' ? '刚刚' : 'Now',
       tokenUsage: '0 tokens',
       diffSummary: activeThread?.diffSummary || { files: 0, additions: 0, deletions: 0 },
       turns: [],
       changedFiles: activeThread?.changedFiles || [],
+      goal: null,
     };
 
     setThreads((prev) => [newThread, ...prev]);
@@ -503,6 +517,7 @@ export function App() {
     invokedSkills: string[];
     createNewWorktree?: boolean;
     mode?: ComposerMode;
+    goalObjective?: string;
   }) => {
     let targetThread = activeThread;
 
@@ -547,8 +562,8 @@ export function App() {
         cwd: wtPath,
         environmentMode: 'worktree',
       };
-      updateThread(activeThread.id, (t) => ({
-        ...t,
+      updateThread(activeThread.id, (th) => ({
+        ...th,
         worktreeId: wtId,
         branch,
         cwd: wtPath,
@@ -561,7 +576,8 @@ export function App() {
       params.prompt,
       params.attachedFiles,
       params.invokedSkills,
-      params.mode || 'agent'
+      params.mode || 'agent',
+      params.goalObjective
     );
   };
 
@@ -576,12 +592,12 @@ export function App() {
       text: steerText,
     };
 
-    updateThread(activeThread.id, (t) => {
-      const lastTurn = t.turns[t.turns.length - 1];
-      if (!lastTurn) return t;
+    updateThread(activeThread.id, (th) => {
+      const lastTurn = th.turns[th.turns.length - 1];
+      if (!lastTurn) return th;
       return {
-        ...t,
-        turns: t.turns.map((tr) =>
+        ...th,
+        turns: th.turns.map((tr) =>
           tr.id === lastTurn.id ? { ...tr, items: [...tr.items, steerItem] } : tr
         ),
       };
@@ -593,14 +609,14 @@ export function App() {
   // Interrupt active turn
   const handleInterruptTurn = () => {
     activeTurnInterruptRef.current[activeThread.id]?.();
-    updateThread(activeThread.id, (t) => ({
-      ...t,
+    updateThread(activeThread.id, (th) => ({
+      ...th,
       status: 'completed',
-      turns: t.turns.map((tr, idx) =>
-        idx === t.turns.length - 1 ? { ...tr, status: 'interrupted' } : tr
+      turns: th.turns.map((tr, idx) =>
+        idx === th.turns.length - 1 ? { ...tr, status: 'interrupted' } : tr
       ),
     }));
-    showToast('Stopped active Codex turn');
+    showToast(i18n.toasts.stoppedTurn);
   };
 
   // Respond to Sandbox Approval Request
@@ -618,10 +634,10 @@ export function App() {
       }));
     }
 
-    updateThread(activeThread.id, (t) => ({
-      ...t,
+    updateThread(activeThread.id, (th) => ({
+      ...th,
       status: 'completed',
-      turns: t.turns.map((tr) => {
+      turns: th.turns.map((tr) => {
         if (tr.id !== turnId) return tr;
         return {
           ...tr,
@@ -639,7 +655,11 @@ export function App() {
       }),
     }));
 
-    showToast(decision === 'deny' ? 'Command denied' : `Approved at ${nowTime}`);
+    showToast(
+      decision === 'deny'
+        ? i18n.toasts.commandDenied
+        : `${i18n.toasts.approvedAt} ${nowTime}`
+    );
   };
 
   const handleToggleRightDrawer = (tab?: RightPanelTab) => {
@@ -660,13 +680,14 @@ export function App() {
       {/* Toast Notification */}
       {toastMessage && (
         <div className="fixed bottom-5 right-5 z-50 px-3.5 py-2 rounded-xl codex-elevated border codex-border text-xs font-medium codex-text-primary shadow-2xl flex items-center gap-2">
-          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+          <span className="w-2 h-2 rounded-full codex-accent-btn animate-pulse" />
           <span>{toastMessage}</span>
         </div>
       )}
 
       {/* Left Sidebar (Official Codex App Structure) */}
       <LeftSidebar
+        lang={lang}
         collapsed={sidebarCollapsed}
         onToggleCollapse={() => setSidebarCollapsed((v) => !v)}
         activeNav={activeNav}
@@ -683,7 +704,7 @@ export function App() {
         activeThreadId={activeThread.id}
         onSelectThread={(id) => {
           setActiveThreadId(id);
-          const target = threads.find((t) => t.id === id);
+          const target = threads.find((th) => th.id === id);
           if (target?.changedFiles[0]) {
             setSelectedDiffFile(target.changedFiles[0].filePath);
           }
@@ -697,7 +718,7 @@ export function App() {
         localCodexStatus={localCodexStatus}
         onRefreshLocalStatus={() => {
           syncLocalEnvironmentAndGit();
-          showToast('Synced local ~/.codex status & git repository');
+          showToast(i18n.toasts.syncedLocal);
         }}
       />
 
@@ -705,19 +726,13 @@ export function App() {
       {activeNav === 'threads' ? (
         <div className="flex-1 flex min-w-0 h-full overflow-hidden">
           <CenterThreadView
+            lang={lang}
             sidebarCollapsed={sidebarCollapsed}
             onToggleSidebar={() => setSidebarCollapsed((v) => !v)}
             rightDrawerOpen={rightDrawerOpen}
             activeRightTab={rightTab}
             onToggleRightDrawer={handleToggleRightDrawer}
             skin={skin}
-            onSelectSkin={(s) => {
-              setSkin(s);
-              showToast(`Switched theme skin to ${s}`);
-            }}
-            onCycleSkin={() => {
-              handleCycleSkin();
-            }}
             activeProject={activeProject}
             projects={projects}
             onSelectProject={setActiveProjectId}
@@ -729,7 +744,7 @@ export function App() {
             localCodexStatus={localCodexStatus}
             onOpenCodexConfig={() => setActiveNav('codex_config')}
             onTogglePin={(id) =>
-              updateThread(id, (t) => ({ ...t, pinned: !t.pinned }))
+              updateThread(id, (th) => ({ ...th, pinned: !th.pinned }))
             }
             onForkThread={(id) => {
               const forked: Thread = {
@@ -737,19 +752,19 @@ export function App() {
                 id: `thr_fork_${Date.now()}`,
                 title: `${activeThread.title} (Fork)`,
                 branch: `${activeThread.branch}-fork`,
-                updatedAt: 'Just now',
+                updatedAt: lang === 'zh-CN' ? '刚刚' : 'Just now',
               };
               setThreads((prev) => [forked, ...prev]);
               setActiveThreadId(forked.id);
               sendJsonRpcRequest('thread/fork', { sourceThreadId: id }, appendRpcLog);
-              showToast('Forked thread');
+              showToast(i18n.toasts.forkedThread);
             }}
             onRevertThread={(id) => {
-              updateThread(id, (t) => ({
-                ...t,
-                turns: t.turns.length > 1 ? t.turns.slice(0, -1) : t.turns,
+              updateThread(id, (th) => ({
+                ...th,
+                turns: th.turns.length > 1 ? th.turns.slice(0, -1) : th.turns,
               }));
-              showToast('Undid last turn');
+              showToast(i18n.toasts.undidLastTurn);
             }}
             onOpenInEditor={async (appId = 'cursor') => {
               const res = await openInExternalApp(
@@ -757,16 +772,18 @@ export function App() {
                 appId
               );
               if (res.ok) {
-                showToast(`Opened workspace in ${res.openedWith || appId}`);
+                showToast(`${i18n.toasts.openedIn} ${res.openedWith || appId}`);
               } else {
-                showToast(`Opened ${activeProject.repoPath} (${appId})`);
+                showToast(`${i18n.toasts.openedIn} ${appId}`);
               }
             }}
             onGitCommitAction={async (action, message) => {
               if (action === 'pr') {
                 startStreamingTurnOnThread(
                   activeThread,
-                  `Create a concise pull request title and summary for the changes on branch ${activeThread.branch}.`,
+                  lang === 'zh-CN'
+                    ? `请为分支 ${activeThread.branch} 上的变更生成简明规范的 Pull Request 标题与说明摘要。`
+                    : `Create a concise pull request title and summary for the changes on branch ${activeThread.branch}.`,
                   [],
                   [],
                   'agent'
@@ -781,8 +798,8 @@ export function App() {
                 activeThread.cwd || activeProject.repoPath
               );
               if (res.git) {
-                updateThread(activeThread.id, (t) => ({
-                  ...t,
+                updateThread(activeThread.id, (th) => ({
+                  ...th,
                   changedFiles: res.git.changedFiles || [],
                   diffSummary: res.git.diffSummary || {
                     files: 0,
@@ -793,8 +810,8 @@ export function App() {
               }
               showToast(
                 res.ok
-                  ? `Committed changes: "${commitMsg}"`
-                  : `Git commit note: ${res.error || 'Done'}`
+                  ? `${i18n.toasts.committedChanges}: "${commitMsg}"`
+                  : `${res.error || 'Done'}`
               );
             }}
             onSelectDiffFile={(filePath) => {
@@ -803,7 +820,7 @@ export function App() {
               setRightDrawerOpen(true);
             }}
             onUpdateThreadConfig={(id, patch) =>
-              updateThread(id, (t) => ({ ...t, ...patch }))
+              updateThread(id, (th) => ({ ...th, ...patch }))
             }
             onSendMessage={handleSendMessage}
             onSteerTurn={handleSteerTurn}
@@ -814,6 +831,7 @@ export function App() {
           {/* Collapsible Right Review / Files / Terminal / Browser Drawer */}
           {rightDrawerOpen && (
             <RightInspectorPane
+              lang={lang}
               activeTab={rightTab}
               onTabChange={setRightTab}
               onClose={() => setRightDrawerOpen(false)}
@@ -831,15 +849,15 @@ export function App() {
                   activeThread.cwd || activeProject.repoPath
                 );
                 if (res.git?.changedFiles) {
-                  updateThread(activeThread.id, (t) => ({
-                    ...t,
+                  updateThread(activeThread.id, (th) => ({
+                    ...th,
                     changedFiles: res.git.changedFiles,
                     diffSummary: res.git.diffSummary,
                   }));
                 } else {
-                  updateThread(activeThread.id, (t) => ({
-                    ...t,
-                    changedFiles: t.changedFiles.map((f) =>
+                  updateThread(activeThread.id, (th) => ({
+                    ...th,
+                    changedFiles: th.changedFiles.map((f) =>
                       f.filePath === filePath ? { ...f, staged: !f.staged } : f
                     ),
                   }));
@@ -851,16 +869,16 @@ export function App() {
                   activeThread.cwd || activeProject.repoPath
                 );
                 if (res.git?.changedFiles) {
-                  updateThread(activeThread.id, (t) => ({
-                    ...t,
+                  updateThread(activeThread.id, (th) => ({
+                    ...th,
                     changedFiles: res.git.changedFiles,
                     diffSummary: res.git.diffSummary,
                   }));
                 } else {
-                  updateThread(activeThread.id, (t) => {
-                    const remaining = t.changedFiles.filter((f) => f.filePath !== filePath);
+                  updateThread(activeThread.id, (th) => {
+                    const remaining = th.changedFiles.filter((f) => f.filePath !== filePath);
                     return {
-                      ...t,
+                      ...th,
                       changedFiles: remaining,
                       diffSummary: {
                         files: remaining.length,
@@ -870,12 +888,12 @@ export function App() {
                     };
                   });
                 }
-                showToast(`Reverted changes in ${filePath}`);
+                showToast(`${i18n.toasts.revertedChanges}: ${filePath}`);
               }}
               onAddInlineComment={(filePath, lineNumber, body) => {
-                updateThread(activeThread.id, (t) => ({
-                  ...t,
-                  changedFiles: t.changedFiles.map((f) =>
+                updateThread(activeThread.id, (th) => ({
+                  ...th,
+                  changedFiles: th.changedFiles.map((f) =>
                     f.filePath === filePath
                       ? {
                           ...f,
@@ -888,7 +906,7 @@ export function App() {
                               side: 'new',
                               author: localCodexStatus?.auth?.name || 'zhangjinhui',
                               body,
-                              createdAt: 'Just now',
+                              createdAt: lang === 'zh-CN' ? '刚刚' : 'Just now',
                             },
                           ],
                         }
@@ -903,7 +921,9 @@ export function App() {
                 if (allComments.length === 0) return;
                 startStreamingTurnOnThread(
                   activeThread,
-                  `Please address these inline code review comments:\n${allComments.join('\n')}`,
+                  lang === 'zh-CN'
+                    ? `请根据以下行级代码评审意见修改代码：\n${allComments.join('\n')}`
+                    : `Please address these inline code review comments:\n${allComments.join('\n')}`,
                   activeThread.changedFiles.map((f) => f.filePath),
                   [],
                   'agent'
@@ -916,8 +936,8 @@ export function App() {
                   activeThread.cwd || activeProject.repoPath
                 );
                 if (res.git) {
-                  updateThread(activeThread.id, (t) => ({
-                    ...t,
+                  updateThread(activeThread.id, (th) => ({
+                    ...th,
                     changedFiles: res.git.changedFiles || [],
                     diffSummary: res.git.diffSummary || {
                       files: 0,
@@ -926,7 +946,11 @@ export function App() {
                     },
                   }));
                 }
-                showToast(`Committed to ${activeThread.branch}: "${message}"`);
+                showToast(
+                  res.ok
+                    ? `${i18n.toasts.committedChanges}: "${message}"`
+                    : `${res.error || 'Done'}`
+                );
               }}
               onCreateWorktree={async (branchName) => {
                 const res = await manageGitWorktree(
@@ -937,109 +961,62 @@ export function App() {
                 );
                 if (res.git?.worktrees) {
                   setWorktrees(res.git.worktrees);
-                } else {
-                  setWorktrees((prev) => [
-                    {
-                      id: `wt_${Date.now()}`,
-                      projectId: activeProject.id,
-                      name: branchName,
-                      branch: branchName,
-                      path:
-                        res.worktreePath ||
-                        `/Users/zhangjinhui/.codex/worktrees/codex-test/${branchName}`,
-                      headCommit: 'HEAD',
-                      isMain: false,
-                      status: 'clean',
-                      ahead: 0,
-                      behind: 0,
-                      changedFilesCount: 0,
-                      additions: 0,
-                      deletions: 0,
-                      createdAt: new Date().toISOString(),
-                    },
-                    ...prev,
-                  ]);
                 }
-                showToast(`Created worktree ${branchName}`);
+                showToast(`${i18n.toasts.createdWorktree}: ${branchName}`);
               }}
-              onMergeWorktree={(wtId) => {
-                const wt = worktrees.find((w) => w.id === wtId);
-                showToast(`Handed off worktree ${wt?.branch || wtId} to Local checkout`);
+              onMergeWorktree={async (wtId) => {
+                const target = worktrees.find((w) => w.id === wtId);
+                if (!target) return;
+                showToast(`${i18n.toasts.syncedWorktree}: ${target.branch}`);
               }}
             />
           )}
         </div>
       ) : (
         <MainFeatureViews
+          lang={lang}
+          onSelectLang={(nextLang) => {
+            setLang(nextLang);
+            showToast(
+              `${t(nextLang).toasts.switchedLang} ${
+                nextLang === 'zh-CN' ? '简体中文' : 'English'
+              }`
+            );
+          }}
           activeNav={activeNav}
           onBackToThreads={() => setActiveNav('threads')}
           skin={skin}
-          onSelectSkin={(s) => {
-            setSkin(s);
-            showToast(`Switched theme skin to ${s}`);
+          onSelectSkin={(nextSkin) => {
+            setSkin(nextSkin);
+            const meta = SKIN_METAS.find((m) => m.id === nextSkin);
+            showToast(
+              `${i18n.toasts.switchedSkin} ${
+                lang === 'zh-CN' ? meta?.nameZh || nextSkin : meta?.nameEn || nextSkin
+              }`
+            );
           }}
           localCodexStatus={localCodexStatus}
           onRefreshLocalStatus={() => {
             syncLocalEnvironmentAndGit();
-            showToast('Refreshed local ~/.codex configuration & CLI status');
+            showToast(i18n.toasts.syncedLocal);
           }}
           reviewQueue={reviewQueue}
           onApproveReviewItem={(id) => {
             setReviewQueue((prev) =>
-              prev.map((r) => (r.id === id ? { ...r, status: 'approved' } : r))
+              prev.map((item) => (item.id === id ? { ...item, status: 'approved' } : item))
             );
-            showToast('Approved & merged review item');
+            showToast(i18n.toasts.approvedReview);
           }}
           onRejectReviewItem={(id) => {
             setReviewQueue((prev) =>
-              prev.map((r) => (r.id === id ? { ...r, status: 'rejected' } : r))
+              prev.map((item) => (item.id === id ? { ...item, status: 'rejected' } : item))
             );
-            showToast('Discarded review item');
+            showToast(i18n.toasts.discardedReview);
           }}
           onOpenReviewInThread={(item) => {
-            const newThread: Thread = {
-              id: `thr_rq_${Date.now()}`,
-              projectId: item.projectId,
-              title: item.title,
-              pinned: false,
-              status: 'completed',
-              worktreeId: 'wt_main',
-              branch: item.worktreeBranch,
-              cwd: activeProject.repoPath,
-              environmentMode: 'worktree',
-              permissionMode: 'workspace-write',
-              model: localCodexStatus?.config?.effective?.model || 'gpt-5.4',
-              personality: 'pragmatic',
-              reasoningEffort: 'high',
-              subagent: 'default',
-              updatedAt: 'Just now',
-              tokenUsage: '4.2k tokens',
-              diffSummary: item.diffSummary,
-              turns: [
-                {
-                  id: `turn_rq_${Date.now()}`,
-                  threadId: `thr_rq_${Date.now()}`,
-                  status: 'completed',
-                  startedAt: new Date().toISOString(),
-                  model: localCodexStatus?.config?.effective?.model || 'gpt-5.4',
-                  personality: 'pragmatic',
-                  reasoningEffort: 'high',
-                  items: [
-                    {
-                      id: `item_rq_msg_${Date.now()}`,
-                      type: 'agentMessage',
-                      status: 'completed',
-                      timestamp: 'Now',
-                      text: `**${item.automationName}** completed on branch \`${item.worktreeBranch}\`:\n\n${item.summary}`,
-                    },
-                  ],
-                },
-              ],
-              changedFiles: item.files,
-            };
-            setThreads((prev) => [newThread, ...prev]);
-            setActiveThreadId(newThread.id);
             setActiveNav('threads');
+            handleCreateNewThread(activeProject.id);
+            showToast(item.title);
           }}
           skills={skills}
           onToggleSkill={(id) =>
@@ -1047,21 +1024,28 @@ export function App() {
               prev.map((s) => (s.id === id ? { ...s, enabled: !s.enabled } : s))
             )
           }
-          onSaveSkill={(updated) =>
-            setSkills((prev) =>
-              prev.map((s) => (s.id === updated.id ? updated : s))
-            )
-          }
-          onCreateSkill={(newSk) => {
-            const created: SkillDefinition = { ...newSk, id: `sk_${Date.now()}` };
+          onSaveSkill={async (updated) => {
+            setSkills((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
+            if (updated.path.startsWith('.codex/')) {
+              await writeWorkspaceFile(updated.path, updated.content);
+            }
+          }}
+          onCreateSkill={async (newSkill) => {
+            const created: SkillDefinition = {
+              ...newSkill,
+              id: `sk_${Date.now()}`,
+            };
             setSkills((prev) => [created, ...prev]);
-            showToast(`Created skill $${created.slug}`);
+            await writeWorkspaceFile(created.path, created.content);
+            showToast(`$${created.slug}`);
           }}
           onLaunchSkillThread={(skill) => {
             setActiveNav('threads');
             startStreamingTurnOnThread(
               activeThread,
-              skill.samplePrompt,
+              lang === 'zh-CN'
+                ? `运行技能 $${skill.slug}：${skill.description}`
+                : `Run skill $${skill.slug}: ${skill.description}`,
               [],
               [skill.slug],
               'agent'
@@ -1070,7 +1054,11 @@ export function App() {
           automations={automations}
           onToggleAutomation={(id) =>
             setAutomations((prev) =>
-              prev.map((a) => (a.id === id ? { ...a, enabled: !a.enabled } : a))
+              prev.map((a) =>
+                a.id === id
+                  ? { ...a, enabled: !a.enabled }
+                  : a
+              )
             )
           }
           onRunAutomationNow={(id) => {
@@ -1084,7 +1072,6 @@ export function App() {
               job.skills,
               'agent'
             );
-            showToast(`Triggered automation "${job.name}" via local Codex`);
           }}
           onCreateAutomation={(newJob) => {
             const created: AutomationJob = {
@@ -1096,7 +1083,7 @@ export function App() {
               totalRuns: 0,
             };
             setAutomations((prev) => [created, ...prev]);
-            showToast(`Scheduled automation "${created.name}"`);
+            showToast(created.name);
           }}
           worktrees={worktrees}
           onCreateWorktree={async (branch) => {
@@ -1109,39 +1096,51 @@ export function App() {
             if (res.git?.worktrees) {
               setWorktrees(res.git.worktrees);
             }
-            showToast(`Created worktree ${branch}`);
+            showToast(`${i18n.toasts.createdWorktree}: ${branch}`);
           }}
           onMergeWorktree={(id) => {
-            const wt = worktrees.find((w) => w.id === id);
-            showToast(`Handed off ${wt?.branch || id} to local checkout`);
+            const target = worktrees.find((w) => w.id === id);
+            if (target) showToast(`${i18n.toasts.syncedWorktree}: ${target.branch}`);
           }}
           onDeleteWorktree={async (id) => {
-            const wt = worktrees.find((w) => w.id === id);
-            if (wt) {
-              await manageGitWorktree('remove', wt.branch, wt.path, activeProject.repoPath);
+            const target = worktrees.find((w) => w.id === id);
+            if (!target) return;
+            const res = await manageGitWorktree(
+              'remove',
+              target.branch,
+              target.path,
+              activeProject.repoPath
+            );
+            if (res.git?.worktrees) {
+              setWorktrees(res.git.worktrees);
+            } else {
+              setWorktrees((prev) => prev.filter((w) => w.id !== id));
             }
-            setWorktrees((prev) => prev.filter((w) => w.id !== id));
-            showToast('Removed worktree');
+            showToast(`${i18n.toasts.removedWorktree}: ${target.branch}`);
           }}
           onJumpToWorktreeThread={(wt) => {
-            if (wt.boundThreadId) {
-              setActiveThreadId(wt.boundThreadId);
-            }
+            updateThread(activeThread.id, (th) => ({
+              ...th,
+              worktreeId: wt.id,
+              branch: wt.branch,
+              cwd: wt.path,
+              environmentMode: wt.isMain ? 'local' : 'worktree',
+            }));
             setActiveNav('threads');
+            showToast(wt.branch);
           }}
           subagents={subagents}
           onSaveSubagent={(updated) =>
-            setSubagents((prev) =>
-              prev.map((s) => (s.id === updated.id ? updated : s))
-            )
+            setSubagents((prev) => prev.map((a) => (a.id === updated.id ? updated : a)))
           }
-          onCreateSubagent={(newAg) =>
-            setSubagents((prev) => [...prev, { ...newAg, id: `sub_${Date.now()}` }])
+          onCreateSubagent={(newAgent) =>
+            setSubagents((prev) => [{ ...newAgent, id: `sub_${Date.now()}` }, ...prev])
           }
           agentsMdContent={agentsMdContent}
-          onSaveAgentsMd={(content) => {
+          onSaveAgentsMd={async (content) => {
             setAgentsMdContent(content);
-            writeWorkspaceFile('AGENTS.md', content);
+            await writeWorkspaceFile('AGENTS.md', content);
+            showToast('AGENTS.md');
           }}
           sandboxPolicy={sandboxPolicy}
           onUpdateSandboxPolicy={(patch) =>
@@ -1150,39 +1149,40 @@ export function App() {
         />
       )}
 
-      {/* Command Palette Modal (Cmd+K) */}
+      {/* Command Palette (Cmd+K) */}
       <CommandPaletteModal
+        lang={lang}
         isOpen={isCommandPaletteOpen}
         onClose={() => setIsCommandPaletteOpen(false)}
         threads={threads}
         skills={skills}
         worktrees={worktrees}
-        onSelectThread={(id) => {
-          setActiveThreadId(id);
-          setActiveNav('threads');
-        }}
+        onSelectThread={setActiveThreadId}
         onSelectNav={setActiveNav}
         onCreateNewThread={() => handleCreateNewThread(activeProject.id)}
-        onSpawnParallelAgents={() => {
-          setActiveNav('threads');
-          handleCycleSkin();
-        }}
+        onSpawnParallelAgents={() => setActiveNav('codex_config')}
         onInvokeSkill={(slug) => {
-          const sk = skills.find((s) => s.slug === slug);
-          if (sk) {
-            setActiveNav('threads');
-            startStreamingTurnOnThread(activeThread, sk.samplePrompt, [], [sk.slug], 'agent');
-          }
+          setActiveNav('threads');
+          startStreamingTurnOnThread(
+            activeThread,
+            `Run $${slug} on this repository.`,
+            [],
+            [slug],
+            'agent'
+          );
         }}
       />
 
       {/* JSON-RPC 2.0 Lite Inspector Modal */}
       <RpcInspectorModal
+        lang={lang}
         isOpen={isRpcInspectorOpen}
         onClose={() => setIsRpcInspectorOpen(false)}
         logs={rpcLogs}
         onClearLogs={() => setRpcLogs([])}
-        onSendTestRpc={(method, params) => sendJsonRpcRequest(method, params, appendRpcLog)}
+        onSendTestRpc={(method, params) =>
+          sendJsonRpcRequest(method, params, appendRpcLog)
+        }
       />
     </div>
   );

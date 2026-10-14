@@ -13,14 +13,17 @@ import {
   Settings,
 } from 'lucide-react';
 import {
+  AppLanguage,
   JsonRpcLogEntry,
   NavSection,
   SkillDefinition,
   Thread,
   WorktreeInfo,
 } from '../types/codex';
+import { t } from '../i18n/translations';
 
 interface CommandPaletteModalProps {
+  lang: AppLanguage;
   isOpen: boolean;
   onClose: () => void;
   threads: Thread[];
@@ -34,6 +37,7 @@ interface CommandPaletteModalProps {
 }
 
 export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
+  lang,
   isOpen,
   onClose,
   threads,
@@ -49,10 +53,11 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
 
   if (!isOpen) return null;
 
+  const i18n = t(lang);
   const q = query.toLowerCase().trim();
 
   const matchingThreads = threads.filter(
-    (t) => t.title.toLowerCase().includes(q) || t.branch.toLowerCase().includes(q)
+    (th) => th.title.toLowerCase().includes(q) || th.branch.toLowerCase().includes(q)
   );
   const matchingSkills = skills.filter(
     (s) => s.name.toLowerCase().includes(q) || s.slug.toLowerCase().includes(q)
@@ -71,13 +76,13 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="p-3.5 border-b codex-border flex items-center gap-3">
-          <Search className="w-4 h-4 text-emerald-500" />
+          <Search className="w-4 h-4 codex-accent-text" />
           <input
             type="text"
             autoFocus
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search threads, $skills, worktrees, or run a command..."
+            placeholder={i18n.modals.searchPlaceholder}
             className="flex-1 bg-transparent text-sm codex-text-primary placeholder:codex-text-muted focus:outline-none font-sans"
           />
           <button
@@ -92,7 +97,7 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
           {/* Quick Actions */}
           <div>
             <div className="px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider codex-text-muted">
-              Actions
+              {i18n.modals.actions}
             </div>
             <div className="space-y-0.5">
               <button
@@ -103,8 +108,8 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
                 className="w-full flex items-center justify-between px-3 py-2 rounded-xl codex-hover text-xs codex-text-primary"
               >
                 <span className="flex items-center gap-2">
-                  <Plus className="w-3.5 h-3.5 text-emerald-500" />
-                  <span>New thread</span>
+                  <Plus className="w-3.5 h-3.5 codex-accent-text" />
+                  <span>{i18n.modals.newThread}</span>
                 </span>
                 <kbd className="text-[10px] font-mono codex-text-muted">⌘N</kbd>
               </button>
@@ -117,8 +122,8 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
                 className="w-full flex items-center justify-between px-3 py-2 rounded-xl codex-hover text-xs codex-text-primary"
               >
                 <span className="flex items-center gap-2">
-                  <Palette className="w-3.5 h-3.5 text-emerald-500" />
-                  <span>Cycle Theme Skin (一键切换皮肤: 极夜黑 / 原生昼白 / 极光深空)</span>
+                  <Palette className="w-3.5 h-3.5 codex-accent-text" />
+                  <span>{i18n.modals.switchSkinInSettings}</span>
                 </span>
                 <span className="text-[10px] font-mono codex-text-muted">Skin</span>
               </button>
@@ -131,8 +136,8 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
                 className="w-full flex items-center justify-between px-3 py-2 rounded-xl codex-hover text-xs codex-text-primary"
               >
                 <span className="flex items-center gap-2">
-                  <Settings className="w-3.5 h-3.5 text-emerald-500" />
-                  <span>Open Local Codex Auth &amp; config.toml Settings</span>
+                  <Settings className="w-3.5 h-3.5 codex-accent-text" />
+                  <span>{i18n.modals.openLocalSettings}</span>
                 </span>
                 <span className="text-[10px] font-mono codex-text-muted">~/.codex</span>
               </button>
@@ -145,10 +150,10 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
                 className="w-full flex items-center justify-between px-3 py-2 rounded-xl codex-hover text-xs codex-text-primary"
               >
                 <span className="flex items-center gap-2">
-                  <Inbox className="w-3.5 h-3.5 text-amber-400" />
-                  <span>Open Review queue</span>
+                  <Inbox className="w-3.5 h-3.5 text-amber-500" />
+                  <span>{i18n.modals.openReviewQueue}</span>
                 </span>
-                <span className="text-[10px] font-mono codex-text-muted">Navigation</span>
+                <span className="text-[10px] font-mono codex-text-muted">Queue</span>
               </button>
             </div>
           </div>
@@ -157,25 +162,25 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
           {matchingThreads.length > 0 && (
             <div>
               <div className="px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider codex-text-muted">
-                Threads
+                {i18n.sidebar.threads}
               </div>
               <div className="space-y-0.5">
-                {matchingThreads.map((t) => (
+                {matchingThreads.map((th) => (
                   <button
-                    key={t.id}
+                    key={th.id}
                     onClick={() => {
                       onSelectNav('threads');
-                      onSelectThread(t.id);
+                      onSelectThread(th.id);
                       onClose();
                     }}
                     className="w-full flex items-center justify-between px-3 py-2 rounded-xl codex-hover text-xs codex-text-primary"
                   >
                     <span className="flex items-center gap-2 truncate">
-                      <MessageSquare className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
-                      <span className="truncate">{t.title}</span>
+                      <MessageSquare className="w-3.5 h-3.5 codex-accent-text shrink-0" />
+                      <span className="truncate">{th.title}</span>
                     </span>
                     <span className="text-[10px] font-mono codex-text-muted shrink-0 ml-2">
-                      {t.branch}
+                      {th.branch}
                     </span>
                   </button>
                 ))}
@@ -187,7 +192,7 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
           {matchingSkills.length > 0 && (
             <div>
               <div className="px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider codex-text-muted">
-                Skills
+                {i18n.sidebar.skills}
               </div>
               <div className="space-y-0.5">
                 {matchingSkills.map((s) => (
@@ -200,8 +205,8 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
                     className="w-full flex items-center justify-between px-3 py-2 rounded-xl codex-hover text-xs codex-text-primary"
                   >
                     <span className="flex items-center gap-2">
-                      <Sparkles className="w-3.5 h-3.5 text-purple-400" />
-                      <span className="font-mono text-emerald-500">${s.slug}</span>
+                      <Sparkles className="w-3.5 h-3.5 codex-accent-text" />
+                      <span className="font-mono codex-accent-text">${s.slug}</span>
                       <span className="codex-text-secondary">— {s.name}</span>
                     </span>
                     <span className="text-[10px] font-mono codex-text-muted">Run</span>
@@ -215,7 +220,7 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
           {matchingWorktrees.length > 0 && (
             <div>
               <div className="px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider codex-text-muted">
-                Worktrees
+                {i18n.sidebar.worktrees}
               </div>
               <div className="space-y-0.5">
                 {matchingWorktrees.map((w) => (
@@ -228,7 +233,7 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
                     className="w-full flex items-center justify-between px-3 py-2 rounded-xl codex-hover text-xs codex-text-primary"
                   >
                     <span className="flex items-center gap-2 font-mono">
-                      <GitBranch className="w-3.5 h-3.5 text-emerald-500" />
+                      <GitBranch className="w-3.5 h-3.5 codex-accent-text" />
                       <span>{w.branch}</span>
                     </span>
                     <span className="text-[10px] font-mono codex-text-muted">{w.headCommit}</span>
@@ -244,6 +249,7 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
 };
 
 interface RpcInspectorModalProps {
+  lang: AppLanguage;
   isOpen: boolean;
   onClose: () => void;
   logs: JsonRpcLogEntry[];
@@ -252,6 +258,7 @@ interface RpcInspectorModalProps {
 }
 
 export const RpcInspectorModal: React.FC<RpcInspectorModalProps> = ({
+  lang,
   isOpen,
   onClose,
   logs,
@@ -262,6 +269,7 @@ export const RpcInspectorModal: React.FC<RpcInspectorModalProps> = ({
   const [rpcParams, setRpcParams] = useState('{}');
 
   if (!isOpen) return null;
+  const i18n = t(lang);
 
   return (
     <div
@@ -274,9 +282,9 @@ export const RpcInspectorModal: React.FC<RpcInspectorModalProps> = ({
       >
         <div className="p-4 border-b codex-border flex items-center justify-between">
           <div className="flex items-center gap-2.5">
-            <Activity className="w-4 h-4 text-emerald-500" />
+            <Activity className="w-4 h-4 codex-accent-text" />
             <h3 className="text-sm font-semibold codex-text-primary">
-              Codex App-Server · JSON-RPC 2.0 Lite Inspector
+              {i18n.modals.rpcInspectorTitle}
             </h3>
           </div>
           <div className="flex items-center gap-2">
@@ -284,7 +292,7 @@ export const RpcInspectorModal: React.FC<RpcInspectorModalProps> = ({
               onClick={onClearLogs}
               className="px-2 py-1 rounded codex-card border codex-border text-xs codex-text-secondary"
             >
-              Clear
+              {i18n.modals.clear}
             </button>
             <button
               onClick={onClose}
@@ -302,7 +310,7 @@ export const RpcInspectorModal: React.FC<RpcInspectorModalProps> = ({
               className="rounded-xl border codex-border codex-card p-3 space-y-1.5"
             >
               <div className="flex items-center justify-between text-[11px]">
-                <span className="px-2 py-0.5 rounded font-semibold bg-emerald-500/15 text-emerald-500">
+                <span className="px-2 py-0.5 rounded font-semibold codex-accent-soft">
                   {entry.direction} · {entry.method}
                 </span>
                 <span className="codex-text-muted">{entry.timestamp}</span>
@@ -341,10 +349,10 @@ export const RpcInspectorModal: React.FC<RpcInspectorModalProps> = ({
                 onSendTestRpc(rpcMethod, {});
               }
             }}
-            className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium flex items-center gap-1.5"
+            className="px-3.5 py-1.5 rounded-lg codex-accent-btn text-xs font-medium flex items-center gap-1.5"
           >
             <Send className="w-3.5 h-3.5" />
-            <span>Send RPC</span>
+            <span>{i18n.modals.sendRpc}</span>
           </button>
         </div>
       </div>

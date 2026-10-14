@@ -768,7 +768,7 @@ export const RightInspectorPane: React.FC<RightInspectorPaneProps> = ({
             <div className="text-[11px] font-mono codex-text-muted truncate">{wt.path}</div>
             <div className="flex items-center justify-between pt-1">
               <span className="text-[10px] codex-text-muted">
-                HEAD {wt.headCommit} · {wt.lastModified}
+                HEAD {wt.headCommit} · {wt.createdAt}
               </span>
               {wt.branch !== 'main' && wt.branch !== 'master' && (
                 <button
