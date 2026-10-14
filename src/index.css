@@ -3,88 +3,88 @@
 @tailwind utilities;
 
 /* ============================================================================
-   3-Skin One-Click Theme Engine for OpenAI Codex Desktop App
-   Skins:
-     1. codex-dark      — Official OpenAI Codex macOS Dark (Matte Obsidian #0D0D0D)
-     2. macos-light     — Native macOS Daylight Pure (#FFFFFF / #F4F4F6)
-     3. aurora-midnight — Cyber Aurora Deep Slate (#070B14 / Cyan-Indigo Accent)
+   3 Curated Desktop App Theme Skins:
+     1. wechat   (Default) — 微信桌面版经典温润灰白 + 微信品牌绿 (#07C160) + 荧光绿气泡 (#95EC69)
+     2. qq                 — 腾讯 QQ NT 桌面版冰川蓝灰 + 企鹅天蓝 (#0099FF) + 灵动渐变顶栏
+     3. dingtalk           — 钉钉企业级深色工作台 (#101622 / #161E2E) + 钉钉商务蓝 (#0089FF)
    ============================================================================ */
 
 :root,
-[data-skin='codex-dark'] {
-  color-scheme: dark;
-  --bg-app: #0d0d0d;
-  --bg-sidebar: #141414;
-  --bg-header: rgba(13, 13, 13, 0.88);
-  --bg-elevated: #1a1a1c;
-  --bg-card: #161618;
-  --bg-composer: #1e1e21;
-  --bg-code: #111113;
-  --bg-hover: rgba(255, 255, 255, 0.055);
-  --bg-active: rgba(255, 255, 255, 0.095);
-  --border-subtle: rgba(255, 255, 255, 0.075);
-  --border-strong: rgba(255, 255, 255, 0.15);
-  --text-primary: #ececf1;
-  --text-secondary: #a1a1aa;
-  --text-muted: #6e6e77;
-  --accent-primary: #10a37f;
-  --accent-btn-bg: #ffffff;
-  --accent-btn-text: #0d0d0d;
-  --user-bubble-bg: #26262a;
-  --user-bubble-text: #f4f4f6;
-}
-
-[data-skin='macos-light'] {
+[data-skin='wechat'] {
   color-scheme: light;
-  --bg-app: #ffffff;
-  --bg-sidebar: #f3f4f6;
-  --bg-header: rgba(255, 255, 255, 0.9);
-  --bg-elevated: #f9fafb;
-  --bg-card: #f8fafc;
-  --bg-composer: #f3f4f6;
-  --bg-code: #f1f5f9;
-  --bg-hover: rgba(15, 23, 42, 0.05);
-  --bg-active: rgba(15, 23, 42, 0.09);
-  --border-subtle: rgba(15, 23, 42, 0.085);
-  --border-strong: rgba(15, 23, 42, 0.18);
-  --text-primary: #111827;
-  --text-secondary: #4b5563;
-  --text-muted: #6b7280;
-  --accent-primary: #0d9488;
-  --accent-btn-bg: #111827;
+  --bg-app: #f5f5f5;
+  --bg-sidebar: #eaeaea;
+  --bg-header: rgba(245, 245, 245, 0.96);
+  --bg-elevated: #ffffff;
+  --bg-card: #ffffff;
+  --bg-composer: #ffffff;
+  --bg-code: #f0f2f5;
+  --bg-hover: rgba(0, 0, 0, 0.045);
+  --bg-active: #dcdcdc;
+  --border-subtle: #e0e0e0;
+  --border-strong: #c9c9c9;
+  --text-primary: #191919;
+  --text-secondary: #555555;
+  --text-muted: #888888;
+  --accent-primary: #07c160;
+  --accent-btn-bg: #07c160;
   --accent-btn-text: #ffffff;
-  --user-bubble-bg: #e5e7eb;
-  --user-bubble-text: #111827;
+  --user-bubble-bg: #95ec69;
+  --user-bubble-text: #111111;
 }
 
-[data-skin='aurora-midnight'] {
+[data-skin='qq'] {
+  color-scheme: light;
+  --bg-app: #f2f5fa;
+  --bg-sidebar: #e8eef8;
+  --bg-header: rgba(238, 243, 252, 0.94);
+  --bg-elevated: #ffffff;
+  --bg-card: #ffffff;
+  --bg-composer: #ffffff;
+  --bg-code: #edf1f9;
+  --bg-hover: rgba(0, 153, 255, 0.06);
+  --bg-active: rgba(0, 153, 255, 0.13);
+  --border-subtle: #dce4f2;
+  --border-strong: #b3c7ec;
+  --text-primary: #03081a;
+  --text-secondary: #4e5670;
+  --text-muted: #8e96b0;
+  --accent-primary: #0099ff;
+  --accent-btn-bg: #0099ff;
+  --accent-btn-text: #ffffff;
+  --user-bubble-bg: #0099ff;
+  --user-bubble-text: #ffffff;
+}
+
+[data-skin='dingtalk'] {
   color-scheme: dark;
-  --bg-app: #070b14;
-  --bg-sidebar: #050811;
-  --bg-header: rgba(7, 11, 20, 0.88);
-  --bg-elevated: #0e1525;
-  --bg-card: #0c1220;
-  --bg-composer: #10182b;
-  --bg-code: #060912;
-  --bg-hover: rgba(56, 189, 248, 0.08);
-  --bg-active: rgba(56, 189, 248, 0.14);
-  --border-subtle: rgba(148, 163, 184, 0.12);
-  --border-strong: rgba(56, 189, 248, 0.32);
-  --text-primary: #f1f5f9;
-  --text-secondary: #94a3b8;
-  --text-muted: #64748b;
-  --accent-primary: #38bdf8;
-  --accent-btn-bg: #38bdf8;
-  --accent-btn-text: #041019;
-  --user-bubble-bg: #16223b;
-  --user-bubble-text: #f0f9ff;
+  --bg-app: #161e2e;
+  --bg-sidebar: #101622;
+  --bg-header: rgba(16, 22, 34, 0.94);
+  --bg-elevated: #212c42;
+  --bg-card: #1d273b;
+  --bg-composer: #1f2b40;
+  --bg-code: #0e1420;
+  --bg-hover: rgba(0, 137, 255, 0.09);
+  --bg-active: rgba(0, 137, 255, 0.18);
+  --border-subtle: rgba(148, 163, 184, 0.14);
+  --border-strong: rgba(0, 137, 255, 0.38);
+  --text-primary: #f0f4fa;
+  --text-secondary: #a3b3cc;
+  --text-muted: #6c7f9e;
+  --accent-primary: #0089ff;
+  --accent-btn-bg: #0089ff;
+  --accent-btn-text: #ffffff;
+  --user-bubble-bg: #0089ff;
+  --user-bubble-text: #ffffff;
 }
 
 @layer base {
   body {
     background-color: var(--bg-app);
     color: var(--text-primary);
-    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', system-ui, sans-serif;
+    font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB',
+      'Microsoft YaHei', 'SF Pro Text', 'Inter', system-ui, sans-serif;
     font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
     user-select: none;
     -webkit-font-smoothing: antialiased;
@@ -115,6 +115,10 @@
 .codex-header-bg {
   background-color: var(--bg-header);
   border-color: var(--border-subtle);
+}
+
+[data-skin='qq'] .codex-header-bg {
+  background: linear-gradient(90deg, rgba(226, 238, 255, 0.94), rgba(242, 246, 253, 0.94));
 }
 
 .codex-elevated {
@@ -156,42 +160,13 @@
   color: var(--text-muted);
 }
 
-/* Light mode automatic contrast adjustments for legacy dark utility classes inside subviews */
-[data-skin='macos-light'] .bg-\[\#090A0F\],
-[data-skin='macos-light'] .bg-\[\#0B0D14\],
-[data-skin='macos-light'] .bg-\[\#0A0C12\],
-[data-skin='macos-light'] .bg-\[\#080A0E\],
-[data-skin='macos-light'] .bg-\[\#080A0F\] {
-  background-color: #ffffff !important;
-  color: #111827 !important;
+.codex-accent-text {
+  color: var(--accent-primary);
 }
 
-[data-skin='macos-light'] .bg-\[\#111520\],
-[data-skin='macos-light'] .bg-\[\#10131C\],
-[data-skin='macos-light'] .bg-\[\#121622\],
-[data-skin='macos-light'] .bg-\[\#141824\],
-[data-skin='macos-light'] .bg-\[\#0E1017\],
-[data-skin='macos-light'] .bg-\[\#0B0D13\],
-[data-skin='macos-light'] .bg-\[\#090B10\] {
-  background-color: #f3f4f6 !important;
-  color: #1f2937 !important;
-}
-
-[data-skin='macos-light'] .border-\[\#222736\],
-[data-skin='macos-light'] .border-\[\#242B3D\],
-[data-skin='macos-light'] .border-\[\#262E42\] {
-  border-color: #e5e7eb !important;
-}
-
-[data-skin='macos-light'] .text-white,
-[data-skin='macos-light'] .text-slate-100,
-[data-skin='macos-light'] .text-slate-200 {
-  color: #111827 !important;
-}
-
-[data-skin='macos-light'] .text-slate-300,
-[data-skin='macos-light'] .text-slate-400 {
-  color: #4b5563 !important;
+.codex-accent-bg {
+  background-color: var(--accent-primary);
+  color: var(--accent-btn-text);
 }
 
 /* Custom subtle scrollbars for desktop feel */
@@ -205,12 +180,12 @@
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(148, 163, 184, 0.22);
+  background: rgba(148, 163, 184, 0.28);
   border-radius: 9999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(148, 163, 184, 0.4);
+  background: rgba(148, 163, 184, 0.45);
 }
 
 .app-drag-region {

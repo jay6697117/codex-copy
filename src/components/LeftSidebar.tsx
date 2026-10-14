@@ -19,16 +19,20 @@ import {
   AlertCircle,
   RefreshCw,
   Inbox,
+  Target,
 } from 'lucide-react';
 import {
+  AppLanguage,
   LocalCodexStatus,
   NavSection,
   ProjectWorkspace,
   Thread,
   WorktreeInfo,
 } from '../types/codex';
+import { t } from '../i18n/translations';
 
 interface LeftSidebarProps {
+  lang: AppLanguage;
   collapsed: boolean;
   onToggleCollapse: () => void;
   activeNav: NavSection;
@@ -51,6 +55,7 @@ interface LeftSidebarProps {
 }
 
 export const LeftSidebar: React.FC<LeftSidebarProps> = ({
+  lang,
   collapsed,
   onToggleCollapse,
   activeNav,
@@ -75,14 +80,18 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
     return null;
   }
 
-  const pinnedThreads = threads.filter((t) => t.pinned);
+  const i18n = t(lang);
+  const pinnedThreads = threads.filter((th) => th.pinned);
 
   const renderThreadDot = (thread: Thread) => {
     if (thread.status === 'running') {
-      return <Loader2 className="w-3.5 h-3.5 text-emerald-400 animate-spin shrink-0" />;
+      return <Loader2 className="w-3.5 h-3.5 codex-accent-text animate-spin shrink-0" />;
     }
     if (thread.status === 'waiting_approval') {
       return <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse shrink-0" />;
+    }
+    if (thread.goal?.status === 'active') {
+      return <Target className="w-3 h-3 codex-accent-text shrink-0" />;
     }
     if (thread.isLocalCliSession) {
       return <Terminal className="w-3 h-3 codex-text-muted shrink-0" />;
@@ -97,11 +106,11 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
     'zhangjinhui';
   const authModeBadge = localCodexStatus?.auth?.authMode
     ? localCodexStatus.auth.authMode === 'chatgpt'
-      ? localCodexStatus.auth.planType || 'ChatGPT Account'
-      : `Auth: ${localCodexStatus.auth.authMode}`
+      ? localCodexStatus.auth.planType || i18n.sidebar.chatGptAccount
+      : `${i18n.sidebar.authPrefix}: ${localCodexStatus.auth.authMode}`
     : localCodexStatus?.cli?.installed
-    ? 'Codex CLI Ready'
-    : 'Local Config';
+    ? i18n.sidebar.cliReady
+    : i18n.sidebar.localConfig;
 
   return (
     <aside className="w-[252px] codex-sidebar-bg border-r flex flex-col h-full shrink-0 select-none">
@@ -115,7 +124,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
           </div>
           <button
             onClick={onToggleCollapse}
-            title="Collapse sidebar (⌘B)"
+            title={i18n.sidebar.collapseSidebar}
             className="p-1.5 rounded-md codex-text-secondary codex-hover transition-colors"
           >
             <PanelLeftClose className="w-4 h-4" />
@@ -125,14 +134,14 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
         <div className="flex items-center gap-1 app-no-drag">
           <button
             onClick={onOpenCommandPalette}
-            title="Search threads, files, skills, or commands (⌘K)"
+            title={i18n.sidebar.searchCommandPalette}
             className="p-1.5 rounded-md codex-text-secondary codex-hover transition-colors"
           >
             <Search className="w-4 h-4" />
           </button>
           <button
             onClick={() => onCreateNewThread(activeProjectId, false)}
-            title="New thread (⌘N)"
+            title={i18n.sidebar.newThreadShortcut}
             className="p-1.5 rounded-md codex-text-secondary codex-hover transition-colors"
           >
             <SquarePen className="w-4 h-4" />
@@ -140,7 +149,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
         </div>
       </div>
 
-      {/* Official OpenAI Codex App Top Navigation Items: New thread, Automations, Skills */}
+      {/* Official OpenAI Codex App Top Navigation Items */}
       <div className="px-2 pb-2 space-y-0.5 border-b codex-border">
         <button
           onClick={() => onCreateNewThread(activeProjectId, false)}
@@ -148,7 +157,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
         >
           <span className="flex items-center gap-2.5">
             <SquarePen className="w-4 h-4 codex-text-secondary group-hover:codex-text-primary" />
-            <span>New thread</span>
+            <span>{i18n.sidebar.newThread}</span>
           </span>
           <kbd className="text-[10px] font-mono codex-text-muted opacity-0 group-hover:opacity-100 transition-opacity">
             ⌘N
@@ -165,7 +174,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
         >
           <span className="flex items-center gap-2.5">
             <Clock className="w-4 h-4" />
-            <span>Automations</span>
+            <span>{i18n.sidebar.automations}</span>
           </span>
           {automationsCount > 0 && (
             <span className="text-[11px] font-mono codex-text-muted">{automationsCount}</span>
@@ -182,7 +191,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
         >
           <span className="flex items-center gap-2.5">
             <Sparkles className="w-4 h-4" />
-            <span>Skills</span>
+            <span>{i18n.sidebar.skills}</span>
           </span>
           <span className="text-[11px] font-mono codex-text-muted">{skillsCount}</span>
         </button>
@@ -197,10 +206,10 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
         >
           <span className="flex items-center gap-2.5">
             <Inbox className="w-4 h-4" />
-            <span>Review queue</span>
+            <span>{i18n.sidebar.reviewQueue}</span>
           </span>
           {pendingReviewCount > 0 && (
-            <span className="px-1.5 py-0.2 rounded-full text-[10px] font-semibold bg-amber-500/20 text-amber-400">
+            <span className="px-1.5 py-0.2 rounded-full text-[10px] font-semibold bg-amber-500/20 text-amber-500">
               {pendingReviewCount}
             </span>
           )}
@@ -216,7 +225,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
         >
           <span className="flex items-center gap-2.5">
             <GitBranch className="w-4 h-4" />
-            <span>Worktrees</span>
+            <span>{i18n.sidebar.worktrees}</span>
           </span>
           <span className="text-[11px] font-mono codex-text-muted">{worktrees.length}</span>
         </button>
@@ -229,7 +238,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
           <div>
             <div className="flex items-center gap-1.5 px-2.5 pb-1 text-[11px] font-medium codex-text-muted">
               <Pin className="w-3 h-3" />
-              <span>Pinned</span>
+              <span>{i18n.sidebar.pinned}</span>
             </div>
             <div className="space-y-0.5">
               {pinnedThreads.map((thread) => {
@@ -271,10 +280,10 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
         {/* Threads Grouped by Project */}
         <div>
           <div className="flex items-center justify-between px-2.5 pb-1 text-[11px] font-medium codex-text-muted">
-            <span>Threads</span>
+            <span>{i18n.sidebar.threads}</span>
             <button
               onClick={onRefreshLocalStatus}
-              title="Sync local ~/.codex sessions & git status"
+              title={i18n.sidebar.syncLocalSessions}
               className="p-0.5 rounded codex-hover codex-text-muted hover:codex-text-primary"
             >
               <RefreshCw className="w-3 h-3" />
@@ -283,7 +292,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
 
           <div className="space-y-1.5">
             {projects.map((project) => {
-              const projectThreads = threads.filter((t) => t.projectId === project.id);
+              const projectThreads = threads.filter((th) => th.projectId === project.id);
               const isCurrentProj = project.id === activeProjectId;
               return (
                 <div key={project.id} className="space-y-0.5">
@@ -317,7 +326,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                         onSelectProject(project.id);
                         onCreateNewThread(project.id, false);
                       }}
-                      title={`Start new thread in ${project.name}`}
+                      title={`${i18n.sidebar.startNewThreadIn} ${project.name}`}
                       className="p-1 opacity-0 group-hover:opacity-100 codex-text-muted hover:codex-text-primary rounded transition-opacity"
                     >
                       <Plus className="w-3.5 h-3.5" />
@@ -387,14 +396,14 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
           className={`w-full p-2 rounded-lg text-left transition-colors flex items-center justify-between gap-2 ${
             activeNav === 'codex_config' ? 'codex-active' : 'codex-hover'
           }`}
-          title="View & edit local ~/.codex/auth.json, ~/.codex/config.toml, MCP servers, and CLI settings"
+          title={i18n.sidebar.settingsAndLocalConfig}
         >
           <div className="flex items-center gap-2.5 min-w-0">
-            <div className="w-6 h-6 rounded-full bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center shrink-0">
+            <div className="w-6 h-6 rounded-full codex-accent-soft flex items-center justify-center shrink-0">
               {isLoggedIn ? (
-                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
+                <CheckCircle2 className="w-3.5 h-3.5 codex-accent-text" />
               ) : (
-                <AlertCircle className="w-3.5 h-3.5 text-amber-400" />
+                <AlertCircle className="w-3.5 h-3.5 text-amber-500" />
               )}
             </div>
             <div className="min-w-0">
@@ -406,7 +415,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                 {localCodexStatus?.config?.effective?.model && (
                   <>
                     <span>·</span>
-                    <span className="font-mono text-emerald-500">
+                    <span className="font-mono codex-accent-text">
                       {localCodexStatus.config.effective.model}
                     </span>
                   </>

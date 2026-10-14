@@ -6,19 +6,17 @@ import {
   Sparkles,
   GitBranch,
   Activity,
-  Play,
-  Shield,
-  CalendarClock,
+  Palette,
   Inbox,
   Send,
-  Layers,
+  Plus,
+  Settings,
 } from 'lucide-react';
 import {
   JsonRpcLogEntry,
   NavSection,
   SkillDefinition,
   Thread,
-  WorkspaceLayoutMode,
   WorktreeInfo,
 } from '../types/codex';
 
@@ -30,9 +28,9 @@ interface CommandPaletteModalProps {
   worktrees: WorktreeInfo[];
   onSelectThread: (threadId: string) => void;
   onSelectNav: (nav: NavSection) => void;
-  onLaunchSkillThread: (skill: SkillDefinition) => void;
+  onCreateNewThread: () => void;
   onSpawnParallelAgents: () => void;
-  onSetLayoutMode: (mode: WorkspaceLayoutMode) => void;
+  onInvokeSkill: (slug: string) => void;
 }
 
 export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
@@ -43,9 +41,9 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
   worktrees,
   onSelectThread,
   onSelectNav,
-  onLaunchSkillThread,
+  onCreateNewThread,
   onSpawnParallelAgents,
-  onSetLayoutMode,
+  onInvokeSkill,
 }) => {
   const [query, setQuery] = useState('');
 
@@ -65,26 +63,26 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-start justify-center pt-20 p-4"
+      className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-start justify-center pt-20 p-4"
       onClick={onClose}
     >
       <div
-        className="w-full max-w-2xl rounded-2xl bg-[#121622] border border-[#2A334B] shadow-2xl overflow-hidden"
+        className="w-full max-w-xl rounded-2xl codex-elevated border codex-border shadow-2xl overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="p-3.5 border-b border-[#222736] flex items-center gap-3">
-          <Search className="w-4 h-4 text-emerald-400" />
+        <div className="p-3.5 border-b codex-border flex items-center gap-3">
+          <Search className="w-4 h-4 text-emerald-500" />
           <input
             type="text"
             autoFocus
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Type a command, jump to a thread, invoke a $skill, or switch worktree..."
-            className="flex-1 bg-transparent text-sm text-white placeholder-slate-500 focus:outline-none"
+            placeholder="Search threads, $skills, worktrees, or run a command..."
+            className="flex-1 bg-transparent text-sm codex-text-primary placeholder:codex-text-muted focus:outline-none font-sans"
           />
           <button
             onClick={onClose}
-            className="p-1 rounded-lg hover:bg-slate-800 text-slate-400"
+            className="p-1 rounded-lg codex-hover codex-text-muted"
           >
             <X className="w-4 h-4" />
           </button>
@@ -93,36 +91,50 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
         <div className="max-h-[420px] overflow-y-auto p-2 space-y-4">
           {/* Quick Actions */}
           <div>
-            <div className="px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
-              Quick Orchestration Actions
+            <div className="px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider codex-text-muted">
+              Actions
             </div>
-            <div className="space-y-1">
+            <div className="space-y-0.5">
+              <button
+                onClick={() => {
+                  onCreateNewThread();
+                  onClose();
+                }}
+                className="w-full flex items-center justify-between px-3 py-2 rounded-xl codex-hover text-xs codex-text-primary"
+              >
+                <span className="flex items-center gap-2">
+                  <Plus className="w-3.5 h-3.5 text-emerald-500" />
+                  <span>New thread</span>
+                </span>
+                <kbd className="text-[10px] font-mono codex-text-muted">⌘N</kbd>
+              </button>
+
               <button
                 onClick={() => {
                   onSpawnParallelAgents();
                   onClose();
                 }}
-                className="w-full flex items-center justify-between px-3 py-2 rounded-xl hover:bg-[#1B2234] text-xs text-slate-200"
+                className="w-full flex items-center justify-between px-3 py-2 rounded-xl codex-hover text-xs codex-text-primary"
               >
                 <span className="flex items-center gap-2">
-                  <Play className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>Spawn 3 Parallel Worktree Agents (Refactor + Tests + Docs)</span>
+                  <Palette className="w-3.5 h-3.5 text-emerald-500" />
+                  <span>Cycle Theme Skin (一键切换皮肤: 极夜黑 / 原生昼白 / 极光深空)</span>
                 </span>
-                <span className="text-[10px] font-mono text-emerald-300">Batch Run</span>
+                <span className="text-[10px] font-mono codex-text-muted">Skin</span>
               </button>
 
               <button
                 onClick={() => {
-                  onSetLayoutMode('tiled_4pane');
+                  onSelectNav('codex_config');
                   onClose();
                 }}
-                className="w-full flex items-center justify-between px-3 py-2 rounded-xl hover:bg-[#1B2234] text-xs text-slate-200"
+                className="w-full flex items-center justify-between px-3 py-2 rounded-xl codex-hover text-xs codex-text-primary"
               >
                 <span className="flex items-center gap-2">
-                  <Layers className="w-3.5 h-3.5 text-cyan-400" />
-                  <span>Switch to Tiled 4-Pane Workbench (Chat + Diff + Preview + Terminal)</span>
+                  <Settings className="w-3.5 h-3.5 text-emerald-500" />
+                  <span>Open Local Codex Auth &amp; config.toml Settings</span>
                 </span>
-                <span className="text-[10px] font-mono text-cyan-300">Layout #33301</span>
+                <span className="text-[10px] font-mono codex-text-muted">~/.codex</span>
               </button>
 
               <button
@@ -130,13 +142,13 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
                   onSelectNav('review_queue');
                   onClose();
                 }}
-                className="w-full flex items-center justify-between px-3 py-2 rounded-xl hover:bg-[#1B2234] text-xs text-slate-200"
+                className="w-full flex items-center justify-between px-3 py-2 rounded-xl codex-hover text-xs codex-text-primary"
               >
                 <span className="flex items-center gap-2">
                   <Inbox className="w-3.5 h-3.5 text-amber-400" />
-                  <span>Open Central Review Queue</span>
+                  <span>Open Review queue</span>
                 </span>
-                <span className="text-[10px] font-mono text-slate-400">Navigation</span>
+                <span className="text-[10px] font-mono codex-text-muted">Navigation</span>
               </button>
             </div>
           </div>
@@ -144,10 +156,10 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
           {/* Matching Threads */}
           {matchingThreads.length > 0 && (
             <div>
-              <div className="px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
-                Agent Threads
+              <div className="px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider codex-text-muted">
+                Threads
               </div>
-              <div className="space-y-1">
+              <div className="space-y-0.5">
                 {matchingThreads.map((t) => (
                   <button
                     key={t.id}
@@ -156,13 +168,13 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
                       onSelectThread(t.id);
                       onClose();
                     }}
-                    className="w-full flex items-center justify-between px-3 py-2 rounded-xl hover:bg-[#1B2234] text-xs text-slate-200"
+                    className="w-full flex items-center justify-between px-3 py-2 rounded-xl codex-hover text-xs codex-text-primary"
                   >
                     <span className="flex items-center gap-2 truncate">
-                      <MessageSquare className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                      <MessageSquare className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
                       <span className="truncate">{t.title}</span>
                     </span>
-                    <span className="text-[10px] font-mono text-indigo-300 shrink-0 ml-2">
+                    <span className="text-[10px] font-mono codex-text-muted shrink-0 ml-2">
                       {t.branch}
                     </span>
                   </button>
@@ -174,25 +186,25 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
           {/* Matching Skills */}
           {matchingSkills.length > 0 && (
             <div>
-              <div className="px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
-                Skills Library
+              <div className="px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider codex-text-muted">
+                Skills
               </div>
-              <div className="space-y-1">
+              <div className="space-y-0.5">
                 {matchingSkills.map((s) => (
                   <button
                     key={s.id}
                     onClick={() => {
-                      onLaunchSkillThread(s);
+                      onInvokeSkill(s.slug);
                       onClose();
                     }}
-                    className="w-full flex items-center justify-between px-3 py-2 rounded-xl hover:bg-[#1B2234] text-xs text-slate-200"
+                    className="w-full flex items-center justify-between px-3 py-2 rounded-xl codex-hover text-xs codex-text-primary"
                   >
                     <span className="flex items-center gap-2">
                       <Sparkles className="w-3.5 h-3.5 text-purple-400" />
-                      <span className="font-mono text-purple-300">${s.slug}</span>
-                      <span className="text-slate-400">— {s.name}</span>
+                      <span className="font-mono text-emerald-500">${s.slug}</span>
+                      <span className="codex-text-secondary">— {s.name}</span>
                     </span>
-                    <span className="text-[10px] font-mono text-slate-400">Run Skill</span>
+                    <span className="text-[10px] font-mono codex-text-muted">Run</span>
                   </button>
                 ))}
               </div>
@@ -202,10 +214,10 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
           {/* Matching Worktrees */}
           {matchingWorktrees.length > 0 && (
             <div>
-              <div className="px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
-                Git Worktrees
+              <div className="px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider codex-text-muted">
+                Worktrees
               </div>
-              <div className="space-y-1">
+              <div className="space-y-0.5">
                 {matchingWorktrees.map((w) => (
                   <button
                     key={w.id}
@@ -213,13 +225,13 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
                       onSelectNav('worktrees');
                       onClose();
                     }}
-                    className="w-full flex items-center justify-between px-3 py-2 rounded-xl hover:bg-[#1B2234] text-xs text-slate-200"
+                    className="w-full flex items-center justify-between px-3 py-2 rounded-xl codex-hover text-xs codex-text-primary"
                   >
                     <span className="flex items-center gap-2 font-mono">
-                      <GitBranch className="w-3.5 h-3.5 text-indigo-400" />
+                      <GitBranch className="w-3.5 h-3.5 text-emerald-500" />
                       <span>{w.branch}</span>
                     </span>
-                    <span className="text-[10px] font-mono text-slate-400">{w.headCommit}</span>
+                    <span className="text-[10px] font-mono codex-text-muted">{w.headCommit}</span>
                   </button>
                 ))}
               </div>
@@ -235,16 +247,16 @@ interface RpcInspectorModalProps {
   isOpen: boolean;
   onClose: () => void;
   logs: JsonRpcLogEntry[];
-  appServerConnected: boolean;
-  onSendCustomRpc: (method: string, paramsJson: string) => void;
+  onClearLogs: () => void;
+  onSendTestRpc: (method: string, params: Record<string, unknown>) => Promise<unknown>;
 }
 
 export const RpcInspectorModal: React.FC<RpcInspectorModalProps> = ({
   isOpen,
   onClose,
   logs,
-  appServerConnected,
-  onSendCustomRpc,
+  onClearLogs,
+  onSendTestRpc,
 }) => {
   const [rpcMethod, setRpcMethod] = useState('model/list');
   const [rpcParams, setRpcParams] = useState('{}');
@@ -253,93 +265,86 @@ export const RpcInspectorModal: React.FC<RpcInspectorModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4"
+      className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4"
       onClick={onClose}
     >
       <div
-        className="w-full max-w-4xl h-[75vh] rounded-2xl bg-[#0D1017] border border-[#2A334B] shadow-2xl flex flex-col overflow-hidden"
+        className="w-full max-w-4xl h-[75vh] rounded-2xl codex-elevated border codex-border shadow-2xl flex flex-col overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="p-4 border-b border-[#222736] flex items-center justify-between bg-[#121622]">
+        <div className="p-4 border-b codex-border flex items-center justify-between">
           <div className="flex items-center gap-2.5">
-            <Activity className="w-4 h-4 text-emerald-400" />
-            <h3 className="text-sm font-semibold text-white">
-              Codex App-Server · Bidirectional JSON-RPC 2.0 Lite Inspector (`stdio` / `ws://`)
+            <Activity className="w-4 h-4 text-emerald-500" />
+            <h3 className="text-sm font-semibold codex-text-primary">
+              Codex App-Server · JSON-RPC 2.0 Lite Inspector
             </h3>
-            <span
-              className={`px-2 py-0.5 rounded text-[10px] font-mono ${
-                appServerConnected
-                  ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
-                  : 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30'
-              }`}
-            >
-              {appServerConnected
-                ? 'Connected to http://127.0.0.1:4500'
-                : 'Embedded Harness Active'}
-            </span>
           </div>
-          <button
-            onClick={onClose}
-            className="p-1 rounded-lg hover:bg-slate-800 text-slate-400"
-          >
-            <X className="w-4 h-4" />
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={onClearLogs}
+              className="px-2 py-1 rounded codex-card border codex-border text-xs codex-text-secondary"
+            >
+              Clear
+            </button>
+            <button
+              onClick={onClose}
+              className="p-1 rounded-lg codex-hover codex-text-muted"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
         </div>
 
-        {/* Stream Log Body */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-2.5 font-mono text-xs bg-[#080A0F]">
+        <div className="flex-1 overflow-y-auto p-4 space-y-2.5 font-mono text-xs codex-app-bg">
           {logs.map((entry) => (
             <div
               key={entry.id}
-              className="rounded-xl border border-[#1E2434] bg-[#0E121B] p-3 space-y-1.5"
+              className="rounded-xl border codex-border codex-card p-3 space-y-1.5"
             >
               <div className="flex items-center justify-between text-[11px]">
-                <span
-                  className={`px-2 py-0.5 rounded font-semibold ${
-                    entry.direction === 'client->server'
-                      ? 'bg-cyan-500/15 text-cyan-300'
-                      : entry.direction === 'server-request'
-                      ? 'bg-amber-500/20 text-amber-300'
-                      : 'bg-emerald-500/15 text-emerald-300'
-                  }`}
-                >
+                <span className="px-2 py-0.5 rounded font-semibold bg-emerald-500/15 text-emerald-500">
                   {entry.direction} · {entry.method}
                 </span>
-                <span className="text-slate-500">{entry.timestamp}</span>
+                <span className="codex-text-muted">{entry.timestamp}</span>
               </div>
-              <pre className="text-[11px] text-slate-300 overflow-x-auto leading-relaxed">
+              <pre className="text-[11px] codex-text-secondary overflow-x-auto leading-relaxed">
                 {JSON.stringify(entry.payload, null, 2)}
               </pre>
             </div>
           ))}
         </div>
 
-        {/* Bottom Interactive JSON-RPC Dispatcher */}
-        <div className="p-3 border-t border-[#222736] bg-[#111520] flex flex-wrap items-center gap-2">
+        <div className="p-3 border-t codex-border flex flex-wrap items-center gap-2">
           <select
             value={rpcMethod}
             onChange={(e) => setRpcMethod(e.target.value)}
-            className="bg-[#090B10] border border-[#262E42] rounded-lg px-2.5 py-1.5 text-xs font-mono text-emerald-300"
+            className="codex-card border codex-border rounded-lg px-2.5 py-1.5 text-xs font-mono codex-text-primary"
           >
             <option value="model/list">model/list</option>
             <option value="thread/start">thread/start</option>
             <option value="turn/start">turn/start</option>
-            <option value="turn/steer">turn/steer</option>
             <option value="initialize">initialize</option>
           </select>
           <input
             type="text"
             value={rpcParams}
             onChange={(e) => setRpcParams(e.target.value)}
-            placeholder='{"model":"gpt-6.1-sol"}'
-            className="flex-1 bg-[#090B10] border border-[#262E42] rounded-lg px-3 py-1.5 text-xs font-mono text-white"
+            placeholder='{"model":"gpt-5.4"}'
+            className="flex-1 codex-card border codex-border rounded-lg px-3 py-1.5 text-xs font-mono codex-text-primary"
           />
           <button
-            onClick={() => onSendCustomRpc(rpcMethod, rpcParams)}
+            onClick={() => {
+              try {
+                const parsed = JSON.parse(rpcParams || '{}');
+                onSendTestRpc(rpcMethod, parsed);
+              } catch {
+                onSendTestRpc(rpcMethod, {});
+              }
+            }}
             className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium flex items-center gap-1.5"
           >
             <Send className="w-3.5 h-3.5" />
-            <span>Send JSON-RPC</span>
+            <span>Send RPC</span>
           </button>
         </div>
       </div>

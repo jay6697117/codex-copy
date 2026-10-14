@@ -1,6 +1,8 @@
 export type CodexSurface = 'codex' | 'work' | 'chat';
 
-export type ThemeSkin = 'codex-dark' | 'macos-light' | 'aurora-midnight';
+export type ThemeSkin = 'wechat' | 'qq' | 'dingtalk';
+
+export type AppLanguage = 'zh-CN' | 'en-US';
 
 export type NavSection =
   | 'threads'
@@ -8,29 +10,29 @@ export type NavSection =
   | 'skills'
   | 'review_queue'
   | 'worktrees'
-  | 'subagents'
-  | 'sandbox'
   | 'codex_config';
 
 export type RightPanelTab = 'diff' | 'files' | 'terminal' | 'preview' | 'worktrees';
 
-export type WorkspaceLayoutMode =
-  | 'standard'
-  | 'tiled_4pane'
-  | 'focus_chat'
-  | 'review_zen';
+export type WorkspaceLayoutMode = 'standard' | 'focus_chat';
 
-export type ModelId = string; // Supports any model from ~/.codex/config.toml or official catalog
+export type ModelId = string;
 
 export type PersonalityMode = 'pragmatic' | 'empathetic';
 
 export type ReasoningEffort = 'low' | 'medium' | 'high' | 'max';
 
-export type ComposerMode = 'agent' | 'plan' | 'goal' | 'review';
+export type ComposerMode = 'agent' | 'goal' | 'review';
 
 export type ExecutionEnvironmentMode = 'local' | 'worktree';
 
 export type PermissionMode = 'workspace-write' | 'read-only' | 'full-access';
+
+export interface ThreadGoal {
+  objective: string;
+  status: 'active' | 'paused' | 'completed';
+  updatedAt: string;
+}
 
 export interface LocalCodexSessionSummary {
   id: string;
@@ -233,6 +235,7 @@ export interface Thread {
   cwd?: string;
   environmentMode?: ExecutionEnvironmentMode;
   permissionMode?: PermissionMode;
+  goal?: ThreadGoal | null;
   model: ModelId;
   personality: PersonalityMode;
   reasoningEffort: ReasoningEffort;

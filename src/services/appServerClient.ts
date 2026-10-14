@@ -17,7 +17,6 @@ const FALLBACK_PORT_BASE = 'http://127.0.0.1:4500';
 let rpcRequestId = 100;
 
 async function fetchWithFallback(pathAndQuery: string, init?: RequestInit): Promise<Response> {
-  // 1. Try relative URL first (handled by Vite dev middleware or same-origin server)
   try {
     const res = await fetch(pathAndQuery, init);
     if (res.ok || res.status === 400 || res.status === 403 || res.status === 404) {
@@ -33,7 +32,6 @@ async function fetchWithFallback(pathAndQuery: string, init?: RequestInit): Prom
     // fallback to port 4500
   }
 
-  // 2. Fallback to standalone app-server on port 4500 (e.g., Electron file:// mode)
   return fetch(`${FALLBACK_PORT_BASE}${pathAndQuery}`, init);
 }
 
@@ -339,6 +337,7 @@ export function runInteractiveAgentTurn(params: {
   worktreeBranch: string;
   cwd?: string;
   mode?: ComposerMode;
+  activeGoal?: string;
   sandboxPolicy: SandboxPolicy;
   callbacks: StreamTurnCallbacks;
 }): { interrupt: () => void } {
@@ -356,7 +355,6 @@ export function runInteractiveAgentTurn(params: {
     });
   };
 
-  // Start a live reasoning indicator right away while local `codex` boots up
   const liveReasoningId = `item_live_reason_${Date.now()}`;
   let liveReasoningAdded = false;
 
@@ -377,6 +375,7 @@ export function runInteractiveAgentTurn(params: {
           sandboxMode: params.sandboxPolicy.mode,
           cwd: params.cwd,
           mode: params.mode || 'agent',
+          activeGoal: params.activeGoal,
         }),
         signal: abortController.signal,
       });

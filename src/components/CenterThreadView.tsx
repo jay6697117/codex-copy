@@ -2,9 +2,6 @@ import React, { useState, useRef, useEffect } from 'react';
 import {
   Pin,
   GitBranch,
-  GitFork,
-  RotateCcw,
-  ExternalLink,
   ChevronDown,
   ChevronRight,
   Sparkles,
@@ -13,50 +10,100 @@ import {
   ShieldAlert,
   Check,
   X,
-  Send,
   Square,
   Compass,
-  Bot,
-  Paperclip,
   Cpu,
   Gauge,
-  Sliders,
   Loader2,
-  CornerDownRight,
   CheckCircle2,
   Plus,
+  ArrowUp,
+  PanelLeftOpen,
+  PanelRight,
+  FolderTree,
+  Globe,
+  ExternalLink,
+  GitCommit,
+  Shield,
+  Laptop,
+  RotateCcw,
+  GitFork,
+  Settings,
+  Target,
+  Pause,
+  Play,
+  Edit3,
+  Trash2,
 } from 'lucide-react';
 import {
+  AppLanguage,
+  ComposerMode,
+  ExecutionEnvironmentMode,
+  LocalCodexStatus,
   ModelId,
+  PermissionMode,
   PersonalityMode,
+  ProjectWorkspace,
   ReasoningEffort,
+  RightPanelTab,
   SkillDefinition,
   SubagentConfig,
+  ThemeSkin,
   Thread,
+  ThreadGoal,
   TurnItem,
   WorktreeInfo,
 } from '../types/codex';
+import { t, SKIN_METAS } from '../i18n/translations';
 
 interface CenterThreadViewProps {
+  lang: AppLanguage;
+  sidebarCollapsed: boolean;
+  onToggleSidebar: () => void;
+  rightDrawerOpen: boolean;
+  activeRightTab: RightPanelTab;
+  onToggleRightDrawer: (tab?: RightPanelTab) => void;
+  skin: ThemeSkin;
+  activeProject: ProjectWorkspace;
+  projects: ProjectWorkspace[];
+  onSelectProject: (projectId: string) => void;
   thread: Thread;
   worktrees: WorktreeInfo[];
   skills: SkillDefinition[];
   subagents: SubagentConfig[];
   workspaceFiles: string[];
+  localCodexStatus: LocalCodexStatus | null;
+  onOpenCodexConfig: () => void;
   onTogglePin: (threadId: string) => void;
   onForkThread: (threadId: string) => void;
   onRevertThread: (threadId: string) => void;
-  onOpenInEditor: (filePath?: string) => void;
+  onOpenInEditor: (appId?: string) => void;
+  onGitCommitAction: (action: 'commit' | 'push' | 'pr', message?: string) => void;
   onSelectDiffFile: (filePath: string) => void;
   onUpdateThreadConfig: (
     threadId: string,
-    patch: Partial<Pick<Thread, 'model' | 'personality' | 'reasoningEffort' | 'subagent' | 'worktreeId' | 'branch'>>
+    patch: Partial<
+      Pick<
+        Thread,
+        | 'model'
+        | 'personality'
+        | 'reasoningEffort'
+        | 'subagent'
+        | 'worktreeId'
+        | 'branch'
+        | 'environmentMode'
+        | 'permissionMode'
+        | 'goal'
+      >
+    >
   ) => void;
   onSendMessage: (params: {
     prompt: string;
     attachedFiles: string[];
     invokedSkills: string[];
     createNewWorktree?: boolean;
+    mode?: ComposerMode;
+    goalObjective?: string;
   }) => void;
   onSteerTurn: (steerText: string) => void;
   onInterruptTurn: () => void;
@@ -68,16 +115,38 @@ interface CenterThreadViewProps {
   ) => void;
 }
 
+const IDE_APPS = [
+  { id: 'cursor', label: 'Cursor' },
+  { id: 'vscode', label: 'VS Code' },
+  { id: 'windsurf', label: 'Windsurf' },
+  { id: 'zed', label: 'Zed' },
+  { id: 'ghostty', label: 'Ghostty' },
+  { id: 'iterm', label: 'iTerm2' },
+  { id: 'terminal', label: 'Terminal' },
+  { id: 'finder', label: 'Finder' },
+];
+
 export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
+  lang,
+  sidebarCollapsed,
+  onToggleSidebar,
+  rightDrawerOpen,
+  activeRightTab,
+  onToggleRightDrawer,
+  skin,
+  activeProject,
+  projects,
+  onSelectProject,
   thread,
-  worktrees,
   skills,
-  subagents,
   workspaceFiles,
+  localCodexStatus,
+  onOpenCodexConfig,
   onTogglePin,
   onForkThread,
   onRevertThread,
   onOpenInEditor,
+  onGitCommitAction,
   onSelectDiffFile,
   onUpdateThreadConfig,
   onSendMessage,
@@ -85,17 +154,25 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
   onInterruptTurn,
   onRespondApproval,
 }) => {
+  const i18n = t(lang);
+  const currentSkinMeta = SKIN_METAS.find((s) => s.id === skin) || SKIN_METAS[0];
+
   const [composerText, setComposerText] = useState('');
+  const [composerMode, setComposerMode] = useState<ComposerMode>(
+    thread.goal?.status === 'active' ? 'goal' : 'agent'
+  );
   const [attachedFiles, setAttachedFiles] = useState<string[]>([]);
   const [invokedSkills, setInvokedSkills] = useState<string[]>([]);
-  const [createNewWorktree, setCreateNewWorktree] = useState(false);
-  const [expandedItems, setExpandedItems] = useState<Record<string, boolean>>({
-    item_2: true,
-    item_201_2: true,
-  });
+  const [expandedItems, setExpandedItems] = useState<Record<string, boolean>>({});
   const [showSkillPicker, setShowSkillPicker] = useState(false);
   const [showFilePicker, setShowFilePicker] = useState(false);
   const [showSlashMenu, setShowSlashMenu] = useState(false);
+  const [selectedIde, setSelectedIde] = useState<string>('cursor');
+  const [showIdeMenu, setShowIdeMenu] = useState(false);
+  const [showCommitMenu, setShowCommitMenu] = useState(false);
+  const [quickCommitMsg, setQuickCommitMsg] = useState('');
+  const [editingGoal, setEditingGoal] = useState(false);
+  const [goalDraft, setGoalDraft] = useState(thread.goal?.objective || '');
 
   const scrollEndRef = useRef<HTMLDivElement>(null);
 
@@ -103,11 +180,54 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
     scrollEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [thread.id, thread.turns.length]);
 
+  useEffect(() => {
+    setGoalDraft(thread.goal?.objective || '');
+    if (thread.goal?.status === 'active') {
+      setComposerMode('goal');
+    }
+  }, [thread.id, thread.goal?.objective, thread.goal?.status]);
+
   const isRunning = thread.status === 'running';
-  const isWaitingApproval = thread.status === 'waiting_approval';
+  const envMode: ExecutionEnvironmentMode = thread.environmentMode || 'local';
+  const permMode: PermissionMode = thread.permissionMode || 'workspace-write';
+
+  const configuredModel = localCodexStatus?.config?.effective?.model;
+  const availableModels = Array.from(
+    new Set(
+      [
+        configuredModel,
+        'gpt-5.4',
+        'gpt-5.3-codex',
+        'gpt-6-astra',
+        'o3',
+        'o4-mini',
+      ].filter(Boolean) as string[]
+    )
+  );
 
   const toggleItemExpand = (itemId: string) => {
     setExpandedItems((prev) => ({ ...prev, [itemId]: !prev[itemId] }));
+  };
+
+  const handleSaveGoal = (objectiveText: string, status: ThreadGoal['status'] = 'active') => {
+    const cleaned = objectiveText.trim();
+    if (!cleaned) {
+      onUpdateThreadConfig(thread.id, { goal: null });
+      setEditingGoal(false);
+      return;
+    }
+    onUpdateThreadConfig(thread.id, {
+      goal: {
+        objective: cleaned,
+        status,
+        updatedAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      },
+    });
+    setGoalDraft(cleaned);
+    setEditingGoal(false);
+    if (status === 'active') {
+      setComposerMode('goal');
+    }
   };
 
   const handleInputChange = (val: string) => {
@@ -120,8 +240,8 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
       setShowFilePicker(true);
       setShowSkillPicker(false);
       setShowSlashMenu(false);
-    } else if (val === '/') {
-      setShowSlashMenu(true);
+    } else if (val === '/' || val.startsWith('/goal')) {
+      setShowSlashMenu(val === '/');
       setShowSkillPicker(false);
       setShowFilePicker(false);
     } else {
@@ -131,13 +251,16 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
     }
   };
 
-  const handleSubmit = (e?: React.FormEvent) => {
+  const handleSubmit = (
+    e?: React.FormEvent,
+    overridePrompt?: string,
+    overrideMode?: ComposerMode
+  ) => {
     e?.preventDefault();
-    const trimmed = composerText.trim();
+    const trimmed = (overridePrompt ?? composerText).trim();
     if (!trimmed) return;
 
-    // Handle quick slash commands
-    if (trimmed.startsWith('/personality')) {
+    if (trimmed === '/personality') {
       const nextMode: PersonalityMode =
         thread.personality === 'pragmatic' ? 'empathetic' : 'pragmatic';
       onUpdateThreadConfig(thread.id, { personality: nextMode });
@@ -145,46 +268,139 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
       return;
     }
 
-    if (isRunning) {
+    // Handle `/goal` commands per OpenAI Codex Desktop Goal mode specification
+    if (trimmed === '/goal' || trimmed.startsWith('/goal ')) {
+      const arg = trimmed.slice(5).trim();
+      if (!arg || arg === 'status') {
+        setComposerMode('goal');
+        if (!thread.goal) {
+          setEditingGoal(true);
+        }
+        setComposerText('');
+        return;
+      }
+      if (arg === 'edit') {
+        setComposerMode('goal');
+        setEditingGoal(true);
+        setComposerText('');
+        return;
+      }
+      if (arg === 'pause' && thread.goal) {
+        handleSaveGoal(thread.goal.objective, 'paused');
+        setComposerText('');
+        return;
+      }
+      if (arg === 'resume' && thread.goal) {
+        handleSaveGoal(thread.goal.objective, 'active');
+        setComposerText('');
+        return;
+      }
+      if (arg === 'clear') {
+        onUpdateThreadConfig(thread.id, { goal: null });
+        setComposerMode('agent');
+        setComposerText('');
+        return;
+      }
+      // `/goal <objective>`: set persistent goal and immediately start working toward it
+      handleSaveGoal(arg, 'active');
+      onSendMessage({
+        prompt: arg,
+        attachedFiles,
+        invokedSkills,
+        createNewWorktree: envMode === 'worktree',
+        mode: 'goal',
+        goalObjective: arg,
+      });
+      setComposerText('');
+      setAttachedFiles([]);
+      setInvokedSkills([]);
+      return;
+    }
+
+    if (trimmed === '/review') {
+      onSendMessage({
+        prompt:
+          lang === 'zh-CN'
+            ? '审查当前仓库未提交的 Git 变更，检查潜在缺陷、回归问题及缺失的验证测试。'
+            : 'Review uncommitted git changes in this repository for bugs, regressions, and missing tests.',
+        attachedFiles,
+        invokedSkills,
+        createNewWorktree: false,
+        mode: 'review',
+      });
+      setComposerText('');
+      return;
+    }
+
+    if (isRunning && !overridePrompt) {
       onSteerTurn(trimmed);
       setComposerText('');
       return;
+    }
+
+    const effectiveMode = overrideMode || composerMode;
+    let activeObjective = thread.goal?.objective;
+    if (effectiveMode === 'goal' && !activeObjective) {
+      handleSaveGoal(trimmed, 'active');
+      activeObjective = trimmed;
     }
 
     onSendMessage({
       prompt: trimmed,
       attachedFiles,
       invokedSkills,
-      createNewWorktree,
+      createNewWorktree: envMode === 'worktree',
+      mode: effectiveMode,
+      goalObjective: effectiveMode === 'goal' ? activeObjective : undefined,
     });
-    setComposerText('');
-    setAttachedFiles([]);
-    setInvokedSkills([]);
-    setCreateNewWorktree(false);
+    if (!overridePrompt) {
+      setComposerText('');
+      setAttachedFiles([]);
+      setInvokedSkills([]);
+    }
   };
 
   const renderFormattedMarkdown = (text?: string) => {
     if (!text) return null;
-    const paragraphs = text.split('\n\n');
+    const blocks = text.split(/(```[\s\S]*?```)/g);
     return (
-      <div className="space-y-2.5 text-sm leading-relaxed text-slate-200">
-        {paragraphs.map((para, i) => {
-          if (para.startsWith('1. ') || para.startsWith('- ')) {
-            const lines = para.split('\n');
+      <div className="space-y-3 text-[13.5px] leading-relaxed codex-text-primary">
+        {blocks.map((block, idx) => {
+          if (block.startsWith('```') && block.endsWith('```')) {
+            const lines = block.slice(3, -3).trim().split('\n');
+            const firstLine = lines[0]?.trim() || '';
+            const hasLang = /^[a-zA-Z0-9_-]+$/.test(firstLine);
+            const codeContent = hasLang ? lines.slice(1).join('\n') : lines.join('\n');
             return (
-              <ul key={i} className="space-y-1.5 pl-4 list-disc marker:text-emerald-400">
-                {lines.map((line, j) => {
-                  const cleaned = line.replace(/^(\d+\.|-)\s+/, '');
-                  return (
-                    <li key={j} className="text-slate-200">
-                      {renderInlineFormatting(cleaned)}
-                    </li>
-                  );
-                })}
-              </ul>
+              <pre
+                key={idx}
+                className="p-3.5 rounded-xl codex-card border codex-border font-mono text-xs overflow-x-auto leading-relaxed"
+              >
+                <code>{codeContent}</code>
+              </pre>
             );
           }
-          return <p key={i}>{renderInlineFormatting(para)}</p>;
+
+          const paragraphs = block.trim().split('\n\n').filter(Boolean);
+          return (
+            <div key={idx} className="space-y-2.5">
+              {paragraphs.map((para, pIdx) => {
+                if (para.startsWith('1. ') || para.startsWith('- ') || para.startsWith('* ')) {
+                  const listLines = para.split('\n');
+                  return (
+                    <ul key={pIdx} className="space-y-1.5 pl-4 list-disc">
+                      {listLines.map((li, lIdx) => (
+                        <li key={lIdx}>
+                          {renderInlineFormatting(li.replace(/^(\d+\.|-|\*)\s+/, ''))}
+                        </li>
+                      ))}
+                    </ul>
+                  );
+                }
+                return <p key={pIdx}>{renderInlineFormatting(para)}</p>;
+              })}
+            </div>
+          );
         })}
       </div>
     );
@@ -195,7 +411,7 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
     return parts.map((part, idx) => {
       if (part.startsWith('**') && part.endsWith('**')) {
         return (
-          <strong key={idx} className="font-semibold text-white">
+          <strong key={idx} className="font-semibold codex-text-primary">
             {part.slice(2, -2)}
           </strong>
         );
@@ -204,7 +420,7 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
         return (
           <code
             key={idx}
-            className="px-1.5 py-0.5 mx-0.5 rounded bg-[#181D2C] text-emerald-300 font-mono text-xs border border-slate-700/70"
+            className="px-1.5 py-0.5 mx-0.5 rounded codex-card border codex-border font-mono text-xs codex-accent-text"
           >
             {part.slice(1, -1)}
           </code>
@@ -220,14 +436,21 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
     switch (item.type) {
       case 'userMessage':
         return (
-          <div key={item.id} className="flex justify-end">
-            <div className="max-w-2xl rounded-2xl rounded-tr-sm bg-[#192030] border border-[#28324B] px-4 py-3 text-sm text-slate-100 shadow-sm">
+          <div key={item.id} className="flex justify-end pt-2">
+            <div
+              style={{
+                backgroundColor: 'var(--user-bubble-bg)',
+                color: 'var(--user-bubble-text)',
+                borderColor: 'var(--user-bubble-border)',
+              }}
+              className="max-w-[82%] rounded-2xl border px-4 py-2.5 text-[13.5px] leading-relaxed shadow-sm"
+            >
               {(item.attachedFiles?.length || item.invokedSkills?.length) ? (
                 <div className="flex flex-wrap gap-1.5 mb-2">
                   {item.invokedSkills?.map((skill) => (
                     <span
                       key={skill}
-                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-purple-500/20 text-purple-300 border border-purple-500/30 text-xs font-mono"
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-black/15 text-current text-xs font-mono"
                     >
                       <Sparkles className="w-3 h-3" />${skill}
                     </span>
@@ -235,9 +458,9 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
                   {item.attachedFiles?.map((file) => (
                     <span
                       key={file}
-                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-800 text-slate-300 border border-slate-700 text-xs font-mono"
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-black/15 text-current text-xs font-mono"
                     >
-                      <FileCode2 className="w-3 h-3 text-cyan-400" />@{file}
+                      <FileCode2 className="w-3 h-3" />@{file}
                     </span>
                   ))}
                 </div>
@@ -250,13 +473,13 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
       case 'steerMessage':
         return (
           <div key={item.id} className="flex justify-end">
-            <div className="max-w-xl rounded-xl bg-cyan-950/40 border border-cyan-500/40 px-3.5 py-2 text-xs text-cyan-100 flex items-center gap-2">
-              <Compass className="w-4 h-4 text-cyan-400 shrink-0" />
+            <div className="max-w-lg rounded-xl codex-accent-soft px-3.5 py-2 text-xs flex items-center gap-2">
+              <Compass className="w-3.5 h-3.5 codex-accent-text shrink-0" />
               <div>
-                <span className="font-mono uppercase text-[10px] text-cyan-400 block">
-                  Mid-Turn Steer (turn/steer)
+                <span className="font-mono text-[10px] codex-accent-text block">
+                  {i18n.thread.steeredMidTurn}
                 </span>
-                <span>{item.text}</span>
+                <span className="codex-text-primary">{item.text}</span>
               </div>
             </div>
           </div>
@@ -264,39 +487,29 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
 
       case 'reasoning':
         return (
-          <div
-            key={item.id}
-            className="rounded-xl bg-[#11141E] border border-[#222736] overflow-hidden"
-          >
+          <div key={item.id} className="py-0.5">
             <button
               onClick={() => toggleItemExpand(item.id)}
-              className="w-full px-3.5 py-2 flex items-center justify-between text-xs text-slate-400 hover:text-slate-200 transition-colors"
+              className="inline-flex items-center gap-1.5 text-xs codex-text-muted hover:codex-text-primary transition-colors"
             >
-              <span className="flex items-center gap-2">
-                {item.status === 'streaming' ? (
-                  <Loader2 className="w-3.5 h-3.5 text-emerald-400 animate-spin" />
-                ) : (
-                  <Cpu className="w-3.5 h-3.5 text-emerald-400" />
-                )}
-                <span className="font-medium text-slate-300">
-                  Thought {item.durationSeconds ?? 1}s
-                </span>
-                <span className="text-slate-500 font-mono text-[11px]">
-                  ({item.reasoningSteps?.length || 1} reasoning steps)
-                </span>
-              </span>
-              {isExpanded ? (
-                <ChevronDown className="w-3.5 h-3.5" />
+              {item.status === 'streaming' ? (
+                <Loader2 className="w-3.5 h-3.5 codex-accent-text animate-spin" />
               ) : (
-                <ChevronRight className="w-3.5 h-3.5" />
+                <ChevronRight
+                  className={`w-3.5 h-3.5 transition-transform ${isExpanded ? 'rotate-90' : ''}`}
+                />
               )}
+              <span className="font-medium">
+                {item.status === 'streaming'
+                  ? i18n.thread.thinking
+                  : `${i18n.thread.thoughtFor} ${item.durationSeconds ?? 1}s`}
+              </span>
             </button>
             {isExpanded && item.reasoningSteps && (
-              <div className="px-4 pb-3 pt-1 border-t border-[#1C202E] space-y-1.5 text-xs text-slate-400 font-mono">
+              <div className="mt-1.5 pl-4 border-l-2 codex-border space-y-1 text-xs codex-text-secondary font-mono">
                 {item.reasoningSteps.map((step, idx) => (
-                  <div key={idx} className="flex items-start gap-2">
-                    <span className="text-slate-600 select-none">{idx + 1}.</span>
-                    <span className="text-slate-300/90 leading-relaxed">{step}</span>
+                  <div key={idx} className="leading-relaxed">
+                    {step}
                   </div>
                 ))}
               </div>
@@ -308,18 +521,11 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
         return (
           <div
             key={item.id}
-            className="flex items-center justify-between px-3.5 py-2 rounded-xl bg-[#121622] border border-teal-500/25 text-xs"
+            className="inline-flex items-center gap-2 px-2.5 py-1 rounded-lg codex-card border codex-border text-xs codex-text-secondary"
           >
-            <div className="flex items-center gap-2.5 min-w-0">
-              <span className="px-2 py-0.5 rounded bg-teal-500/15 text-teal-300 border border-teal-500/30 font-mono text-[11px] flex items-center gap-1 shrink-0">
-                <Bot className="w-3 h-3" />
-                subagent:{item.subagentName}
-              </span>
-              <span className="text-slate-300 truncate">{item.subagentTask}</span>
-            </div>
-            <span className="text-[11px] font-mono text-slate-500 shrink-0 ml-2">
-              {item.subagentTokens}
-            </span>
+            <Cpu className="w-3.5 h-3.5 codex-accent-text shrink-0" />
+            <span className="font-mono text-[11px] codex-text-primary">{item.subagentName}</span>
+            <span className="truncate max-w-md">{item.subagentTask}</span>
           </div>
         );
 
@@ -327,36 +533,42 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
         return (
           <div
             key={item.id}
-            className="rounded-xl bg-[#0D1017] border border-[#222736] overflow-hidden text-xs font-mono"
+            className="rounded-xl codex-card border codex-border overflow-hidden text-xs font-mono"
           >
             <button
               onClick={() => toggleItemExpand(item.id)}
-              className="w-full px-3.5 py-2 flex items-center justify-between text-slate-300 hover:bg-[#131722] transition-colors"
+              className="w-full px-3 py-2 flex items-center justify-between codex-text-secondary codex-hover transition-colors"
             >
               <span className="flex items-center gap-2 truncate">
-                <Terminal className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
-                <span className="text-slate-400">$</span>
-                <span className="truncate text-slate-200">{item.command}</span>
+                {item.status === 'streaming' ? (
+                  <Loader2 className="w-3.5 h-3.5 codex-accent-text animate-spin shrink-0" />
+                ) : (
+                  <Terminal className="w-3.5 h-3.5 codex-text-muted shrink-0" />
+                )}
+                <span className="codex-text-muted">{i18n.thread.ran}</span>
+                <span className="truncate codex-text-primary">{item.command}</span>
               </span>
               <span className="flex items-center gap-2 shrink-0">
-                <span
-                  className={`px-1.5 py-0.2 rounded text-[10px] ${
-                    item.exitCode === 0
-                      ? 'bg-emerald-500/15 text-emerald-300'
-                      : 'bg-rose-500/15 text-rose-300'
-                  }`}
-                >
-                  exit {item.exitCode ?? 0}
-                </span>
+                {item.status !== 'streaming' && (
+                  <span
+                    className={`px-1.5 py-0.2 rounded text-[10px] ${
+                      (item.exitCode ?? 0) === 0
+                        ? 'bg-emerald-500/15 text-emerald-500'
+                        : 'bg-rose-500/15 text-rose-500'
+                    }`}
+                  >
+                    exit {item.exitCode ?? 0}
+                  </span>
+                )}
                 {isExpanded ? (
-                  <ChevronDown className="w-3.5 h-3.5 text-slate-500" />
+                  <ChevronDown className="w-3.5 h-3.5 codex-text-muted" />
                 ) : (
-                  <ChevronRight className="w-3.5 h-3.5 text-slate-500" />
+                  <ChevronRight className="w-3.5 h-3.5 codex-text-muted" />
                 )}
               </span>
             </button>
             {isExpanded && item.stdout && (
-              <pre className="p-3 bg-[#080A0E] border-t border-[#1B202E] text-[11px] text-slate-300 overflow-x-auto leading-relaxed">
+              <pre className="p-3 border-t codex-border text-[11px] codex-text-secondary overflow-x-auto leading-relaxed max-h-60">
                 {item.stdout}
               </pre>
             )}
@@ -367,27 +579,26 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
         return (
           <div
             key={item.id}
-            onClick={() => item.filePath && onSelectDiffFile(item.filePath)}
-            className="group cursor-pointer rounded-xl bg-[#121621] hover:bg-[#171C2B] border border-[#242B3D] hover:border-emerald-500/40 px-3.5 py-2.5 transition-all flex items-center justify-between"
+            onClick={() => {
+              if (item.filePath) {
+                onSelectDiffFile(item.filePath);
+                if (!rightDrawerOpen) onToggleRightDrawer('diff');
+              }
+            }}
+            className="group cursor-pointer rounded-xl codex-card border codex-border codex-hover px-3.5 py-2 transition-all flex items-center justify-between"
           >
             <div className="flex items-center gap-2.5 min-w-0">
-              <FileCode2 className="w-4 h-4 text-emerald-400 shrink-0" />
-              <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-medium text-slate-200 group-hover:text-white font-mono truncate">
-                    Edited {item.filePath}
-                  </span>
-                  <span className="text-xs font-mono text-emerald-400">+{item.additions}</span>
-                  <span className="text-xs font-mono text-rose-400">-{item.deletions}</span>
-                </div>
-                {item.summary && (
-                  <div className="text-[11px] text-slate-400 truncate mt-0.5">{item.summary}</div>
-                )}
-              </div>
+              <FileCode2 className="w-4 h-4 codex-accent-text shrink-0" />
+              <span className="text-xs codex-text-muted">{i18n.thread.edited}</span>
+              <span className="text-xs font-medium codex-text-primary font-mono truncate">
+                {item.filePath}
+              </span>
+              <span className="text-xs font-mono text-emerald-500">+{item.additions ?? 1}</span>
+              <span className="text-xs font-mono text-rose-500">-{item.deletions ?? 0}</span>
             </div>
-            <span className="text-[11px] text-emerald-400 opacity-80 group-hover:opacity-100 flex items-center gap-1 shrink-0 ml-2">
-              <span>Inspect Diff</span>
-              <CornerDownRight className="w-3 h-3" />
+            <span className="text-xs codex-text-secondary group-hover:codex-text-primary flex items-center gap-1 shrink-0 ml-2">
+              <span>{i18n.thread.review}</span>
+              <ChevronRight className="w-3.5 h-3.5" />
             </span>
           </div>
         );
@@ -396,71 +607,50 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
         return (
           <div
             key={item.id}
-            className={`rounded-xl border p-4 space-y-3 ${
-              item.status === 'waiting_approval'
-                ? 'bg-amber-950/20 border-amber-500/50 shadow-lg shadow-amber-950/20'
-                : item.status === 'completed'
-                ? 'bg-emerald-950/15 border-emerald-500/30'
-                : 'bg-rose-950/15 border-rose-500/30'
-            }`}
+            className="rounded-xl border border-amber-500/40 bg-amber-500/5 p-4 space-y-3"
           >
-            <div className="flex items-start justify-between gap-3">
+            <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <ShieldAlert className="w-4 h-4 text-amber-400 shrink-0" />
-                <span className="text-xs font-semibold uppercase tracking-wider text-amber-300">
-                  {item.status === 'waiting_approval'
-                    ? 'Ask for Approval · Sandbox Guardrail'
-                    : item.decision === 'deny'
-                    ? 'Command Denied by User'
-                    : 'Command Approved'}
+                <ShieldAlert className="w-4 h-4 text-amber-500" />
+                <span className="text-xs font-semibold text-amber-500">
+                  {i18n.thread.askForApproval}
                 </span>
               </div>
-              <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-amber-500/20 text-amber-200 border border-amber-500/30">
-                Risk: {item.riskLevel || 'medium'}
+              <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-amber-500/15 text-amber-500">
+                {item.sandboxRuleTriggered || i18n.thread.sandboxPermission}
               </span>
             </div>
-
-            <div className="p-2.5 rounded-lg bg-[#090B10] border border-[#222736] font-mono text-xs text-emerald-300 overflow-x-auto">
+            <div className="p-2.5 rounded-lg codex-card border codex-border font-mono text-xs codex-accent-text overflow-x-auto">
               $ {item.approvalCommand}
             </div>
-
-            <div className="text-xs text-slate-300 space-y-1">
-              <p>{item.approvalReason}</p>
-              {item.sandboxRuleTriggered && (
-                <p className="text-[11px] font-mono text-slate-400">
-                  Policy triggered: {item.sandboxRuleTriggered}
-                </p>
-              )}
-            </div>
-
+            <p className="text-xs codex-text-secondary">{item.approvalReason}</p>
             {item.status === 'waiting_approval' && (
-              <div className="flex flex-wrap items-center gap-2 pt-1">
+              <div className="flex items-center gap-2 pt-1">
                 <button
                   onClick={() =>
                     onRespondApproval(turnId, item.id, 'allow_once', item.approvalCommand)
                   }
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium transition-colors"
+                  className="px-3 py-1.5 rounded-lg codex-accent-btn text-xs font-medium flex items-center gap-1.5"
                 >
                   <Check className="w-3.5 h-3.5" />
-                  <span>Allow Once</span>
+                  <span>{i18n.thread.allowOnce}</span>
                 </button>
                 <button
                   onClick={() =>
                     onRespondApproval(turnId, item.id, 'allow_always', item.approvalCommand)
                   }
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#1C2232] hover:bg-[#252D42] text-emerald-300 border border-emerald-500/30 text-xs font-medium transition-colors"
+                  className="px-3 py-1.5 rounded-lg codex-card border codex-border codex-text-primary text-xs font-medium"
                 >
-                  <CheckCircle2 className="w-3.5 h-3.5" />
-                  <span>Always Allow in Worktree</span>
+                  {i18n.thread.alwaysAllow}
                 </button>
                 <button
                   onClick={() =>
                     onRespondApproval(turnId, item.id, 'deny', item.approvalCommand)
                   }
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 text-xs font-medium transition-colors"
+                  className="px-3 py-1.5 rounded-lg bg-rose-500/15 text-rose-500 text-xs font-medium flex items-center gap-1"
                 >
                   <X className="w-3.5 h-3.5" />
-                  <span>Deny & Continue</span>
+                  <span>{i18n.thread.deny}</span>
                 </button>
               </div>
             )}
@@ -469,21 +659,16 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
 
       case 'agentMessage':
         return (
-          <div
-            key={item.id}
-            className="rounded-2xl bg-[#12151E] border border-[#222736] p-4 shadow-sm"
-          >
-            <div className="flex items-center justify-between mb-2 pb-1.5 border-b border-[#1C202E]">
-              <span className="flex items-center gap-2 text-xs font-medium text-emerald-400">
-                <Cpu className="w-3.5 h-3.5" />
-                <span>Codex ({thread.model})</span>
-                <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-slate-800 text-slate-300">
-                  {thread.personality}
-                </span>
-              </span>
-              <span className="text-[11px] font-mono text-slate-500">{item.timestamp}</span>
+          <div key={item.id} className="pt-1 pb-2">
+            <div
+              style={{
+                backgroundColor: 'var(--agent-bubble-bg)',
+                color: 'var(--agent-bubble-text)',
+              }}
+              className="rounded-2xl border codex-border px-4 py-3 shadow-sm"
+            >
+              {renderFormattedMarkdown(item.text)}
             </div>
-            {renderFormattedMarkdown(item.text)}
           </div>
         );
 
@@ -493,119 +678,592 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
   };
 
   return (
-    <section className="flex-1 flex flex-col h-full bg-[#090A0F] min-w-0">
-      {/* Thread Header Bar */}
-      <div className="h-12 px-4 border-b border-[#222736] bg-[#0D0F16] flex items-center justify-between shrink-0">
-        <div className="flex items-center gap-2.5 min-w-0">
+    <section className="flex-1 flex flex-col h-full codex-app-bg min-w-[420px] overflow-hidden">
+      {/* Official OpenAI Codex Desktop App Integrated Top Header Bar */}
+      <header className="h-11 px-3 border-b codex-border codex-header-bg backdrop-blur-md flex items-center justify-between gap-2 shrink-0 select-none z-20">
+        {/* Left: Sidebar Toggle (if collapsed) + Project & Thread Title + Branch/Worktree */}
+        <div className="flex items-center gap-2 min-w-0">
+          {sidebarCollapsed && (
+            <div className="flex items-center gap-1.5 pr-1">
+              <span className="w-3 h-3 rounded-full bg-[#FF5F56] inline-block" />
+              <span className="w-3 h-3 rounded-full bg-[#FFBD2E] inline-block" />
+              <span className="w-3 h-3 rounded-full bg-[#27C93F] inline-block" />
+              <button
+                onClick={onToggleSidebar}
+                title={i18n.header.expandSidebar}
+                className="p-1.5 rounded-md codex-text-secondary codex-hover ml-1"
+              >
+                <PanelLeftOpen className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+
+          {/* Project Selector */}
+          <select
+            value={activeProject.id}
+            onChange={(e) => onSelectProject(e.target.value)}
+            className="bg-transparent text-xs font-medium codex-text-secondary hover:codex-text-primary focus:outline-none cursor-pointer"
+          >
+            {projects.map((p) => (
+              <option key={p.id} value={p.id} className="bg-neutral-900 text-white">
+                {p.name}
+              </option>
+            ))}
+          </select>
+
+          <span className="codex-text-muted text-xs">/</span>
+
+          <h1 className="text-[13px] font-medium codex-text-primary truncate max-w-[260px]">
+            {thread.title}
+          </h1>
+
           <button
             onClick={() => onTogglePin(thread.id)}
-            title={thread.pinned ? 'Unpin thread' : 'Pin thread'}
-            className={`p-1.5 rounded-lg border transition-colors ${
-              thread.pinned
-                ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-400'
-                : 'bg-[#141822] border-[#222736] text-slate-400 hover:text-white'
+            title={thread.pinned ? i18n.header.unpinThread : i18n.header.pinThread}
+            className={`p-1 rounded-md transition-colors ${
+              thread.pinned ? 'text-amber-500' : 'codex-text-muted codex-hover'
             }`}
           >
             <Pin className="w-3.5 h-3.5" />
           </button>
-          <div className="min-w-0">
-            <h1 className="text-sm font-semibold text-white truncate">{thread.title}</h1>
-            <div className="flex items-center gap-2 text-[11px] font-mono text-slate-400">
-              <span className="flex items-center gap-1 text-indigo-300">
-                <GitBranch className="w-3 h-3" />
-                {thread.branch}
-              </span>
-              <span>·</span>
-              <span>{thread.tokenUsage}</span>
-              <span>·</span>
-              <span className="text-emerald-400">+{thread.diffSummary.additions}</span>
-              <span className="text-rose-400">-{thread.diffSummary.deletions}</span>
-            </div>
-          </div>
+
+          {/* Branch & Local/Worktree Hand off Pill */}
+          <button
+            onClick={() =>
+              onUpdateThreadConfig(thread.id, {
+                environmentMode: envMode === 'local' ? 'worktree' : 'local',
+              })
+            }
+            title={i18n.header.switchLocalWorktree}
+            className="hidden lg:inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md codex-card border codex-border text-[11px] font-mono codex-text-secondary codex-hover"
+          >
+            <GitBranch className="w-3 h-3 codex-accent-text" />
+            <span>{thread.branch}</span>
+            <span className="text-[10px] px-1 rounded codex-active">
+              {envMode === 'worktree' ? i18n.header.worktree : i18n.header.local}
+            </span>
+          </button>
         </div>
 
-        {/* Thread Lifecycle Actions: Fork, Revert, Open in IDE */}
+        {/* Right: Open in IDE + Commit/PR + Diff Counter + Panel Toggles + Settings */}
         <div className="flex items-center gap-1.5 shrink-0">
+          {/* Official `Open` Split Button (Cursor / VS Code / Ghostty / Finder) */}
+          <div className="relative flex items-center codex-card border codex-border rounded-lg">
+            <button
+              onClick={() => onOpenInEditor(selectedIde)}
+              className="px-2.5 py-1 text-xs font-medium codex-text-primary codex-hover rounded-l-lg flex items-center gap-1.5"
+              title={`${i18n.header.openIn} ${selectedIde}: ${activeProject.repoPath}`}
+            >
+              <ExternalLink className="w-3.5 h-3.5 codex-text-secondary" />
+              <span className="hidden sm:inline">
+                {i18n.header.openIn}{' '}
+                {IDE_APPS.find((a) => a.id === selectedIde)?.label || 'Cursor'}
+              </span>
+            </button>
+            <button
+              onClick={() => {
+                setShowIdeMenu((v) => !v);
+                setShowCommitMenu(false);
+              }}
+              className="px-1.5 py-1 border-l codex-border codex-text-secondary codex-hover rounded-r-lg"
+            >
+              <ChevronDown className="w-3.5 h-3.5" />
+            </button>
+
+            {showIdeMenu && (
+              <div className="absolute right-0 top-full mt-1 w-44 rounded-xl codex-elevated border codex-border shadow-2xl py-1 z-50">
+                <div className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wider codex-text-muted">
+                  {i18n.header.openWorkspaceIn}
+                </div>
+                {IDE_APPS.map((app) => (
+                  <button
+                    key={app.id}
+                    onClick={() => {
+                      setSelectedIde(app.id);
+                      setShowIdeMenu(false);
+                      onOpenInEditor(app.id);
+                    }}
+                    className="w-full text-left px-3 py-1.5 text-xs codex-text-primary codex-hover flex items-center justify-between"
+                  >
+                    <span>{app.label}</span>
+                    {selectedIde === app.id && <Check className="w-3.5 h-3.5 codex-accent-text" />}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Official `Commit` Split Dropdown (Commit / Push / Create PR) */}
+          <div className="relative flex items-center codex-card border codex-border rounded-lg">
+            <button
+              onClick={() => {
+                setShowCommitMenu((v) => !v);
+                setShowIdeMenu(false);
+              }}
+              className="px-2.5 py-1 text-xs font-medium codex-text-primary codex-hover rounded-lg flex items-center gap-1.5"
+            >
+              <GitCommit className="w-3.5 h-3.5 codex-accent-text" />
+              <span className="hidden sm:inline">{i18n.header.commit}</span>
+              <ChevronDown className="w-3 h-3 codex-text-muted" />
+            </button>
+
+            {showCommitMenu && (
+              <div className="absolute right-0 top-full mt-1 w-72 rounded-xl codex-elevated border codex-border shadow-2xl p-3 space-y-2.5 z-50">
+                <div className="text-xs font-semibold codex-text-primary">
+                  {i18n.header.gitCommitAndPr} ({thread.branch})
+                </div>
+                <input
+                  type="text"
+                  value={quickCommitMsg}
+                  onChange={(e) => setQuickCommitMsg(e.target.value)}
+                  placeholder={i18n.header.commitPlaceholder}
+                  className="w-full px-2.5 py-1.5 rounded-lg codex-card border codex-border text-xs codex-text-primary focus:outline-none"
+                />
+                <div className="space-y-1">
+                  <button
+                    onClick={() => {
+                      onGitCommitAction('commit', quickCommitMsg);
+                      setQuickCommitMsg('');
+                      setShowCommitMenu(false);
+                    }}
+                    className="w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-medium codex-accent-btn flex items-center justify-between"
+                  >
+                    <span>{i18n.header.commitChanges}</span>
+                    <span className="font-mono text-[10px]">git commit</span>
+                  </button>
+                  <button
+                    onClick={() => {
+                      onGitCommitAction('push', quickCommitMsg);
+                      setQuickCommitMsg('');
+                      setShowCommitMenu(false);
+                    }}
+                    className="w-full text-left px-2.5 py-1.5 rounded-lg text-xs codex-text-primary codex-hover flex items-center justify-between"
+                  >
+                    <span>{i18n.header.commitAndPush}</span>
+                    <span className="font-mono text-[10px] codex-text-muted">git push</span>
+                  </button>
+                  <button
+                    onClick={() => {
+                      onGitCommitAction('pr', quickCommitMsg);
+                      setShowCommitMenu(false);
+                    }}
+                    className="w-full text-left px-2.5 py-1.5 rounded-lg text-xs codex-text-primary codex-hover flex items-center justify-between"
+                  >
+                    <span>{i18n.header.createPr}</span>
+                    <span className="font-mono text-[10px] codex-text-muted">gh pr create</span>
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Clickable Diff Counter Pill (+add -del) that toggles the Right Review Drawer */}
           <button
-            onClick={() => onForkThread(thread.id)}
-            title="Fork thread history into a new parallel thread (thread/fork)"
-            className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#141822] hover:bg-[#1B2130] border border-[#222736] text-xs text-slate-300 transition-colors"
+            onClick={() => onToggleRightDrawer('diff')}
+            title={i18n.header.toggleDiffPane}
+            className={`px-2.5 py-1 rounded-lg border text-xs font-mono flex items-center gap-1.5 transition-colors ${
+              rightDrawerOpen && activeRightTab === 'diff'
+                ? 'codex-active codex-accent-soft'
+                : 'codex-card codex-border codex-hover'
+            }`}
           >
-            <GitFork className="w-3.5 h-3.5 text-cyan-400" />
-            <span className="hidden sm:inline">Fork</span>
+            <span className="text-emerald-500">+{thread.diffSummary.additions}</span>
+            <span className="text-rose-500">-{thread.diffSummary.deletions}</span>
           </button>
+
+          {/* Integrated Terminal / Files / Browser Drawer Toggles */}
+          <div className="flex items-center codex-card border codex-border rounded-lg p-0.5">
+            <button
+              onClick={() => onToggleRightDrawer('terminal')}
+              title={i18n.header.toggleTerminal}
+              className={`p-1.5 rounded-md transition-colors ${
+                rightDrawerOpen && activeRightTab === 'terminal'
+                  ? 'codex-active codex-accent-text'
+                  : 'codex-text-secondary codex-hover'
+              }`}
+            >
+              <Terminal className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={() => onToggleRightDrawer('files')}
+              title={i18n.header.toggleFiles}
+              className={`p-1.5 rounded-md transition-colors ${
+                rightDrawerOpen && activeRightTab === 'files'
+                  ? 'codex-active codex-accent-text'
+                  : 'codex-text-secondary codex-hover'
+              }`}
+            >
+              <FolderTree className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={() => onToggleRightDrawer('preview')}
+              title={i18n.header.toggleBrowser}
+              className={`p-1.5 rounded-md transition-colors ${
+                rightDrawerOpen && activeRightTab === 'preview'
+                  ? 'codex-active codex-accent-text'
+                  : 'codex-text-secondary codex-hover'
+              }`}
+            >
+              <Globe className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={() => onToggleRightDrawer()}
+              title={rightDrawerOpen ? i18n.header.closeInspector : i18n.header.openInspector}
+              className={`p-1.5 rounded-md transition-colors ${
+                rightDrawerOpen
+                  ? 'codex-active codex-text-primary'
+                  : 'codex-text-secondary codex-hover'
+              }`}
+            >
+              <PanelRight className="w-3.5 h-3.5" />
+            </button>
+          </div>
+
+          {/* Settings Button (for switching WeChat / QQ / DingTalk skins & Chinese / English) */}
           <button
-            onClick={() => onRevertThread(thread.id)}
-            title="Revert latest turn changes (thread/revert)"
-            className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#141822] hover:bg-[#1B2130] border border-[#222736] text-xs text-slate-300 transition-colors"
+            onClick={onOpenCodexConfig}
+            title={i18n.header.openSettings}
+            className="px-2 py-1 rounded-lg codex-card border codex-border codex-hover flex items-center gap-1.5 text-xs codex-text-secondary hover:codex-text-primary transition-colors"
           >
-            <RotateCcw className="w-3.5 h-3.5 text-amber-400" />
-            <span className="hidden sm:inline">Revert</span>
-          </button>
-          <button
-            onClick={() => onOpenInEditor()}
-            title="Open worktree in VS Code / Cursor"
-            className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#141822] hover:bg-[#1B2130] border border-[#222736] text-xs text-slate-300 transition-colors"
-          >
-            <ExternalLink className="w-3.5 h-3.5 text-emerald-400" />
-            <span className="hidden lg:inline">Open in Editor</span>
+            <span
+              className="w-2 h-2 rounded-full shrink-0"
+              style={{ backgroundColor: currentSkinMeta.accentHex }}
+            />
+            <Settings className="w-3.5 h-3.5" />
           </button>
         </div>
-      </div>
+      </header>
 
-      {/* Scrollable Turn & Item Stream */}
-      <div className="flex-1 overflow-y-auto px-4 md:px-6 py-5 space-y-6">
-        {thread.turns.map((turn) => (
-          <div key={turn.id} className="space-y-3">
-            {turn.items.map((item) => renderTurnItem(turn.id, item))}
-          </div>
-        ))}
-        <div ref={scrollEndRef} />
-      </div>
-
-      {/* Bottom Multi-Function Codex Composer */}
-      <div className="p-3.5 border-t border-[#222736] bg-[#0C0E15] relative">
-        {/* Autocomplete Popover: $skills */}
-        {showSkillPicker && (
-          <div className="absolute bottom-full left-4 mb-2 w-80 rounded-xl bg-[#141824] border border-[#283147] shadow-2xl p-2 z-40">
-            <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 px-2 py-1">
-              Invoke Codex Skill ($skill-name)
-            </div>
-            <div className="max-h-48 overflow-y-auto space-y-1">
-              {skills.map((skill) => (
+      {/* Main Scrollable Thread Timeline */}
+      <div className="flex-1 overflow-y-auto px-6 py-6">
+        <div className="max-w-3xl mx-auto space-y-6">
+          {thread.turns.length === 0 ? (
+            <div className="py-16 text-center space-y-5">
+              <div className="w-12 h-12 rounded-2xl codex-card border codex-border flex items-center justify-center mx-auto shadow-md">
+                <Sparkles className="w-6 h-6 codex-accent-text" />
+              </div>
+              <div className="space-y-1.5">
+                <h2 className="text-lg font-semibold codex-text-primary">
+                  {i18n.thread.emptyTitle}
+                </h2>
+                <p className="text-xs codex-text-secondary max-w-md mx-auto">
+                  {i18n.thread.emptySubtitlePrefix}{' '}
+                  <span className="font-mono codex-text-primary">{activeProject.name}</span> (
+                  <span className="font-mono codex-accent-text">{thread.branch}</span>
+                  ){i18n.thread.emptySubtitleSuffix}
+                </p>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 max-w-xl mx-auto text-left pt-2">
                 <button
-                  key={skill.id}
-                  onClick={() => {
-                    if (!invokedSkills.includes(skill.slug)) {
-                      setInvokedSkills([...invokedSkills, skill.slug]);
-                    }
-                    setComposerText((prev) => prev.replace(/\$$/, ''));
-                    setShowSkillPicker(false);
-                  }}
-                  className="w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-[#1E2538] transition-colors flex items-center justify-between"
+                  onClick={() =>
+                    handleSubmit(
+                      undefined,
+                      lang === 'zh-CN'
+                        ? '检查当前仓库目录结构，并汇总最近未提交的 Git 变更。'
+                        : 'Inspect this repository and summarize any uncommitted changes or recent commits.'
+                    )
+                  }
+                  className="p-3 rounded-xl codex-card border codex-border codex-hover transition-all space-y-1"
                 >
-                  <div>
-                    <div className="text-xs font-mono text-purple-300">${skill.slug}</div>
-                    <div className="text-[11px] text-slate-400 truncate max-w-[220px]">
-                      {skill.description}
+                  <div className="text-xs font-medium codex-text-primary">
+                    {i18n.thread.cardInspectTitle}
+                  </div>
+                  <div className="text-[11px] codex-text-muted">
+                    {i18n.thread.cardInspectDesc}
+                  </div>
+                </button>
+                <button
+                  onClick={() => handleSubmit(undefined, '/review', 'review')}
+                  className="p-3 rounded-xl codex-card border codex-border codex-hover transition-all space-y-1"
+                >
+                  <div className="text-xs font-medium codex-text-primary">
+                    {i18n.thread.cardReviewTitle}
+                  </div>
+                  <div className="text-[11px] codex-text-muted">
+                    {i18n.thread.cardReviewDesc}
+                  </div>
+                </button>
+                <button
+                  onClick={() => {
+                    setComposerMode('goal');
+                    setEditingGoal(true);
+                  }}
+                  className="p-3 rounded-xl codex-card border codex-border codex-hover transition-all space-y-1"
+                >
+                  <div className="text-xs font-medium codex-text-primary flex items-center gap-1.5">
+                    <Target className="w-3.5 h-3.5 codex-accent-text" />
+                    <span>{i18n.thread.cardGoalTitle}</span>
+                  </div>
+                  <div className="text-[11px] codex-text-muted">
+                    {i18n.thread.cardGoalDesc}
+                  </div>
+                </button>
+              </div>
+            </div>
+          ) : (
+            thread.turns.map((turn) => (
+              <div key={turn.id} className="space-y-3">
+                <div className="space-y-2.5">
+                  {turn.items.map((item) => renderTurnItem(turn.id, item))}
+                </div>
+
+                {/* Turn Footer Summary Pill: files changed + Undo + Review changes */}
+                {turn.status === 'completed' && thread.changedFiles.length > 0 && (
+                  <div className="pt-2">
+                    <div className="rounded-xl codex-card border codex-border px-4 py-2.5 flex items-center justify-between">
+                      <div className="flex items-center gap-3 text-xs">
+                        <CheckCircle2 className="w-4 h-4 codex-accent-text" />
+                        <span className="font-medium codex-text-primary">
+                          {thread.diffSummary.files} {i18n.thread.filesChanged}
+                        </span>
+                        <span className="font-mono text-emerald-500">
+                          +{thread.diffSummary.additions}
+                        </span>
+                        <span className="font-mono text-rose-500">
+                          -{thread.diffSummary.deletions}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => onRevertThread(thread.id)}
+                          className="px-2.5 py-1 rounded-lg text-xs codex-text-secondary codex-hover flex items-center gap-1"
+                        >
+                          <RotateCcw className="w-3 h-3" />
+                          <span>{i18n.thread.undo}</span>
+                        </button>
+                        <button
+                          onClick={() => onToggleRightDrawer('diff')}
+                          className="px-3 py-1 rounded-lg codex-active border codex-border text-xs font-medium codex-text-primary"
+                        >
+                          {i18n.thread.reviewChanges}
+                        </button>
+                      </div>
                     </div>
                   </div>
-                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">
-                    {skill.category}
-                  </span>
+                )}
+              </div>
+            ))
+          )}
+          <div ref={scrollEndRef} />
+        </div>
+      </div>
+
+      {/* Official OpenAI Codex App Floating Rounded Composer Pill at Bottom */}
+      <div className="px-6 pb-4 pt-1 shrink-0">
+        <div className="max-w-3xl mx-auto relative">
+          {/* OpenAI Codex Desktop Goal Progress Row (`/goal`) */}
+          {(thread.goal || composerMode === 'goal' || editingGoal) && (
+            <div className="mb-2 rounded-xl codex-card border codex-border px-3.5 py-2 flex items-center justify-between gap-3 shadow-sm">
+              <div className="flex items-center gap-2 min-w-0 flex-1">
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md codex-accent-soft text-[11px] font-semibold shrink-0">
+                  <Target className="w-3 h-3" />
+                  <span>{i18n.thread.goalActiveLabel}</span>
+                </span>
+
+                {editingGoal ? (
+                  <div className="flex items-center gap-1.5 flex-1">
+                    <input
+                      type="text"
+                      value={goalDraft}
+                      onChange={(e) => setGoalDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          handleSaveGoal(goalDraft, 'active');
+                        } else if (e.key === 'Escape') {
+                          setEditingGoal(false);
+                        }
+                      }}
+                      placeholder={i18n.thread.goalSetPlaceholder}
+                      className="flex-1 px-2.5 py-1 rounded-lg codex-app-bg border codex-border text-xs codex-text-primary focus:outline-none"
+                      autoFocus
+                    />
+                    <button
+                      onClick={() => handleSaveGoal(goalDraft, 'active')}
+                      className="px-2.5 py-1 rounded-lg codex-accent-btn text-xs font-medium shrink-0"
+                    >
+                      {i18n.thread.goalSave}
+                    </button>
+                    <button
+                      onClick={() => setEditingGoal(false)}
+                      className="px-2 py-1 rounded-lg text-xs codex-text-muted codex-hover shrink-0"
+                    >
+                      {i18n.thread.goalCancel}
+                    </button>
+                  </div>
+                ) : thread.goal ? (
+                  <div className="flex items-center gap-2 min-w-0 flex-1">
+                    <span className="text-xs font-medium codex-text-primary truncate">
+                      {thread.goal.objective}
+                    </span>
+                    <span
+                      className={`text-[10px] px-1.5 py-0.2 rounded font-mono shrink-0 ${
+                        thread.goal.status === 'active'
+                          ? 'bg-emerald-500/15 text-emerald-500'
+                          : 'bg-amber-500/15 text-amber-500'
+                      }`}
+                    >
+                      {thread.goal.status === 'active'
+                        ? i18n.thread.goalStatusActive
+                        : i18n.thread.goalStatusPaused}
+                    </span>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setEditingGoal(true)}
+                    className="text-xs codex-text-muted hover:codex-text-primary truncate text-left flex-1"
+                  >
+                    {i18n.thread.goalSetPlaceholder}
+                  </button>
+                )}
+              </div>
+
+              {!editingGoal && (
+                <div className="flex items-center gap-1 shrink-0">
+                  <button
+                    onClick={() => {
+                      setGoalDraft(thread.goal?.objective || '');
+                      setEditingGoal(true);
+                    }}
+                    title="/goal edit"
+                    className="p-1 rounded codex-text-muted hover:codex-text-primary codex-hover text-xs flex items-center gap-1"
+                  >
+                    <Edit3 className="w-3 h-3" />
+                    <span className="hidden sm:inline text-[11px]">{i18n.thread.goalEdit}</span>
+                  </button>
+                  {thread.goal && (
+                    <>
+                      <button
+                        onClick={() =>
+                          handleSaveGoal(
+                            thread.goal!.objective,
+                            thread.goal!.status === 'active' ? 'paused' : 'active'
+                          )
+                        }
+                        title={thread.goal.status === 'active' ? '/goal pause' : '/goal resume'}
+                        className="p-1 rounded codex-text-muted hover:codex-text-primary codex-hover text-xs flex items-center gap-1"
+                      >
+                        {thread.goal.status === 'active' ? (
+                          <>
+                            <Pause className="w-3 h-3" />
+                            <span className="hidden sm:inline text-[11px]">
+                              {i18n.thread.goalPause}
+                            </span>
+                          </>
+                        ) : (
+                          <>
+                            <Play className="w-3 h-3" />
+                            <span className="hidden sm:inline text-[11px]">
+                              {i18n.thread.goalResume}
+                            </span>
+                          </>
+                        )}
+                      </button>
+                      <button
+                        onClick={() => {
+                          onUpdateThreadConfig(thread.id, { goal: null });
+                          setComposerMode('agent');
+                        }}
+                        title="/goal clear"
+                        className="p-1 rounded codex-text-muted hover:text-rose-500 codex-hover text-xs flex items-center gap-1"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                        <span className="hidden sm:inline text-[11px]">
+                          {i18n.thread.goalClear}
+                        </span>
+                      </button>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Popover: `/` Slash Commands Menu */}
+          {showSlashMenu && (
+            <div className="absolute bottom-full left-0 mb-2 w-80 rounded-xl codex-elevated border codex-border shadow-2xl p-1.5 z-30">
+              <div className="px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider codex-text-muted flex items-center justify-between">
+                <span>{i18n.thread.slashCommands}</span>
+                <button onClick={() => setShowSlashMenu(false)}>
+                  <X className="w-3 h-3" />
+                </button>
+              </div>
+              {[
+                {
+                  cmd: '/goal',
+                  desc: i18n.thread.slashGoalDesc,
+                },
+                {
+                  cmd: '/review',
+                  desc: i18n.thread.slashReviewDesc,
+                },
+                {
+                  cmd: '/personality',
+                  desc: `${i18n.thread.slashPersonalityDesc} (${thread.personality})`,
+                },
+              ].map((item) => (
+                <button
+                  key={item.cmd}
+                  onClick={() => {
+                    setShowSlashMenu(false);
+                    if (item.cmd === '/goal') {
+                      setComposerMode('goal');
+                      setEditingGoal(true);
+                      setComposerText('');
+                    } else {
+                      handleSubmit(undefined, item.cmd);
+                    }
+                  }}
+                  className="w-full text-left px-2.5 py-1.5 rounded-lg codex-hover flex items-center justify-between text-xs"
+                >
+                  <span className="font-mono codex-accent-text">{item.cmd}</span>
+                  <span className="codex-text-muted text-[11px]">{item.desc}</span>
                 </button>
               ))}
             </div>
-          </div>
-        )}
+          )}
 
-        {/* Autocomplete Popover: @files */}
-        {showFilePicker && (
-          <div className="absolute bottom-full left-4 mb-2 w-80 rounded-xl bg-[#141824] border border-[#283147] shadow-2xl p-2 z-40">
-            <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 px-2 py-1">
-              Attach Workspace File (@file)
+          {/* Popover: `$skill` Picker */}
+          {showSkillPicker && (
+            <div className="absolute bottom-full left-0 mb-2 w-80 max-h-60 overflow-y-auto rounded-xl codex-elevated border codex-border shadow-2xl p-1.5 z-30">
+              <div className="px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider codex-text-muted flex items-center justify-between">
+                <span>{i18n.thread.attachSkill}</span>
+                <button onClick={() => setShowSkillPicker(false)}>
+                  <X className="w-3 h-3" />
+                </button>
+              </div>
+              {skills
+                .filter((s) => s.enabled)
+                .map((skill) => (
+                  <button
+                    key={skill.id}
+                    onClick={() => {
+                      if (!invokedSkills.includes(skill.slug)) {
+                        setInvokedSkills([...invokedSkills, skill.slug]);
+                      }
+                      setComposerText((prev) => prev.replace(/\$$/, ''));
+                      setShowSkillPicker(false);
+                    }}
+                    className="w-full text-left px-2.5 py-1.5 rounded-lg codex-hover flex items-center justify-between text-xs"
+                  >
+                    <span className="font-mono codex-accent-text">${skill.slug}</span>
+                    <span className="text-[10px] codex-text-muted truncate max-w-[150px]">
+                      {skill.scope}
+                    </span>
+                  </button>
+                ))}
             </div>
-            <div className="max-h-48 overflow-y-auto space-y-1">
+          )}
+
+          {/* Popover: `@file` Picker */}
+          {showFilePicker && (
+            <div className="absolute bottom-full left-0 mb-2 w-80 max-h-60 overflow-y-auto rounded-xl codex-elevated border codex-border shadow-2xl p-1.5 z-30">
+              <div className="px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider codex-text-muted flex items-center justify-between">
+                <span>{i18n.thread.attachFile}</span>
+                <button onClick={() => setShowFilePicker(false)}>
+                  <X className="w-3 h-3" />
+                </button>
+              </div>
               {workspaceFiles.map((file) => (
                 <button
                   key={file}
@@ -616,279 +1274,244 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
                     setComposerText((prev) => prev.replace(/@$/, ''));
                     setShowFilePicker(false);
                   }}
-                  className="w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-[#1E2538] text-xs font-mono text-cyan-300 flex items-center gap-2"
+                  className="w-full text-left px-2.5 py-1.5 rounded-lg codex-hover text-xs font-mono codex-text-primary truncate"
                 >
-                  <FileCode2 className="w-3.5 h-3.5" />
-                  <span className="truncate">{file}</span>
+                  @{file}
                 </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Autocomplete Popover: /slash commands */}
-        {showSlashMenu && (
-          <div className="absolute bottom-full left-4 mb-2 w-80 rounded-xl bg-[#141824] border border-[#283147] shadow-2xl p-2 z-40">
-            <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 px-2 py-1">
-              Codex Slash Commands
-            </div>
-            {[
-              {
-                cmd: '/personality',
-                desc: 'Switch between Terse/Pragmatic and Conversational/Empathetic style',
-              },
-              {
-                cmd: '/worktree',
-                desc: 'Isolate this task inside a fresh Git worktree checkout',
-              },
-              {
-                cmd: '/agent explorer',
-                desc: 'Delegate next turn to the high-speed read-only Explorer subagent',
-              },
-              {
-                cmd: '/review',
-                desc: 'Run automated backward-compatibility and security diff review',
-              },
-            ].map((item) => (
-              <button
-                key={item.cmd}
-                onClick={() => {
-                  if (item.cmd === '/personality') {
-                    onUpdateThreadConfig(thread.id, {
-                      personality:
-                        thread.personality === 'pragmatic' ? 'empathetic' : 'pragmatic',
-                    });
-                    setComposerText('');
-                  } else if (item.cmd === '/worktree') {
-                    setCreateNewWorktree(true);
-                    setComposerText('');
-                  } else {
-                    setComposerText(item.cmd + ' ');
-                  }
-                  setShowSlashMenu(false);
-                }}
-                className="w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-[#1E2538] transition-colors"
-              >
-                <div className="text-xs font-mono text-emerald-400">{item.cmd}</div>
-                <div className="text-[11px] text-slate-400">{item.desc}</div>
-              </button>
-            ))}
-          </div>
-        )}
-
-        {/* Composer Box */}
-        <form
-          onSubmit={handleSubmit}
-          className="rounded-2xl bg-[#131722] border border-[#262E42] focus-within:border-emerald-500/60 transition-colors p-3 space-y-2.5 shadow-inner"
-        >
-          {/* Active Attachments & Invoked Skills Row */}
-          {(attachedFiles.length > 0 || invokedSkills.length > 0 || createNewWorktree) && (
-            <div className="flex flex-wrap items-center gap-1.5">
-              {createNewWorktree && (
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-indigo-500/20 text-indigo-300 border border-indigo-500/40 text-xs font-mono">
-                  <GitBranch className="w-3 h-3" />
-                  + Isolated Git Worktree
-                  <button
-                    type="button"
-                    onClick={() => setCreateNewWorktree(false)}
-                    className="ml-1 hover:text-white"
-                  >
-                    ×
-                  </button>
-                </span>
-              )}
-              {invokedSkills.map((slug) => (
-                <span
-                  key={slug}
-                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-purple-500/20 text-purple-300 border border-purple-500/30 text-xs font-mono"
-                >
-                  <Sparkles className="w-3 h-3" />${slug}
-                  <button
-                    type="button"
-                    onClick={() => setInvokedSkills(invokedSkills.filter((s) => s !== slug))}
-                    className="ml-1 hover:text-white"
-                  >
-                    ×
-                  </button>
-                </span>
-              ))}
-              {attachedFiles.map((file) => (
-                <span
-                  key={file}
-                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-800 text-cyan-300 border border-slate-700 text-xs font-mono"
-                >
-                  <FileCode2 className="w-3 h-3" />@{file}
-                  <button
-                    type="button"
-                    onClick={() => setAttachedFiles(attachedFiles.filter((f) => f !== file))}
-                    className="ml-1 hover:text-white"
-                  >
-                    ×
-                  </button>
-                </span>
               ))}
             </div>
           )}
 
-          {/* Textarea */}
-          <textarea
-            rows={2}
-            value={composerText}
-            onChange={(e) => handleInputChange(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                handleSubmit();
+          {/* Main Composer Container */}
+          <form
+            onSubmit={(e) => handleSubmit(e)}
+            className="rounded-2xl codex-composer-bg border codex-border transition-all p-3 space-y-2.5"
+          >
+            {/* Attached `@file` and `$skill` chips */}
+            {(attachedFiles.length > 0 || invokedSkills.length > 0) && (
+              <div className="flex flex-wrap items-center gap-1.5 pb-1">
+                {invokedSkills.map((skill) => (
+                  <span
+                    key={skill}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md codex-accent-soft text-xs font-mono"
+                  >
+                    <Sparkles className="w-3 h-3" />${skill}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setInvokedSkills(invokedSkills.filter((s) => s !== skill))
+                      }
+                    >
+                      <X className="w-3 h-3 ml-0.5" />
+                    </button>
+                  </span>
+                ))}
+                {attachedFiles.map((file) => (
+                  <span
+                    key={file}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md codex-card border codex-border codex-text-primary text-xs font-mono"
+                  >
+                    <FileCode2 className="w-3 h-3 codex-accent-text" />@{file}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setAttachedFiles(attachedFiles.filter((f) => f !== file))
+                      }
+                    >
+                      <X className="w-3 h-3 ml-0.5" />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+
+            {/* Prompt Textarea */}
+            <textarea
+              rows={2}
+              value={composerText}
+              onChange={(e) => handleInputChange(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSubmit();
+                }
+              }}
+              placeholder={
+                isRunning
+                  ? i18n.thread.composerRunningPlaceholder
+                  : composerMode === 'goal'
+                  ? i18n.thread.composerGoalPlaceholder
+                  : i18n.thread.composerDefaultPlaceholder
               }
-            }}
-            placeholder={
-              isRunning
-                ? 'Agent is working... Type here and press Enter to steer mid-turn (turn/steer) without stopping...'
-                : isWaitingApproval
-                ? 'Waiting for your sandbox approval above (or type instructions to steer)...'
-                : 'Ask Codex to build, refactor, or review... Type $ for skills, @ for files, / for commands'
-            }
-            className="w-full bg-transparent text-sm text-slate-100 placeholder-slate-500 focus:outline-none resize-none"
-          />
+              className="w-full bg-transparent text-[13.5px] codex-text-primary placeholder:codex-text-muted focus:outline-none resize-none leading-relaxed"
+            />
 
-          {/* Bottom Composer Controls Toolbar */}
-          <div className="flex flex-wrap items-center justify-between gap-2 pt-1.5 border-t border-[#1E2434] text-xs">
-            <div className="flex flex-wrap items-center gap-1.5">
-              {/* Model Selector */}
-              <select
-                value={thread.model}
-                onChange={(e) =>
-                  onUpdateThreadConfig(thread.id, { model: e.target.value as ModelId })
-                }
-                className="bg-[#1A2030] hover:bg-[#22293D] text-slate-200 border border-[#2C354D] rounded-lg px-2 py-1 text-xs font-medium focus:outline-none cursor-pointer"
-              >
-                <option value="gpt-6.1-sol">GPT-6.1 Sol (Frontier)</option>
-                <option value="gpt-6-luna">GPT-6 Luna (Fast)</option>
-                <option value="gpt-5.3-codex">GPT-5.3 Codex</option>
-                <option value="o4-mini-high">o4-mini-high</option>
-              </select>
-
-              {/* Reasoning Effort */}
-              <div className="flex items-center gap-1 bg-[#1A2030] border border-[#2C354D] rounded-lg px-2 py-1">
-                <Gauge className="w-3 h-3 text-emerald-400" />
-                <select
-                  value={thread.reasoningEffort}
-                  onChange={(e) =>
-                    onUpdateThreadConfig(thread.id, {
-                      reasoningEffort: e.target.value as ReasoningEffort,
-                    })
-                  }
-                  className="bg-transparent text-slate-300 text-xs focus:outline-none cursor-pointer"
-                >
-                  <option value="low" className="bg-[#141824]">Effort: Low</option>
-                  <option value="medium" className="bg-[#141824]">Effort: Medium</option>
-                  <option value="high" className="bg-[#141824]">Effort: High</option>
-                  <option value="max" className="bg-[#141824]">Effort: Max</option>
-                </select>
-              </div>
-
-              {/* Subagent Picker */}
-              <div className="flex items-center gap-1 bg-[#1A2030] border border-[#2C354D] rounded-lg px-2 py-1">
-                <Bot className="w-3 h-3 text-teal-400" />
-                <select
-                  value={thread.subagent}
-                  onChange={(e) =>
-                    onUpdateThreadConfig(thread.id, { subagent: e.target.value })
-                  }
-                  className="bg-transparent text-slate-300 text-xs focus:outline-none cursor-pointer"
-                >
-                  {subagents.map((sa) => (
-                    <option key={sa.id} value={sa.name} className="bg-[#141824]">
-                      Agent: {sa.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Personality Toggle (/personality) */}
-              <button
-                type="button"
-                onClick={() =>
-                  onUpdateThreadConfig(thread.id, {
-                    personality:
-                      thread.personality === 'pragmatic' ? 'empathetic' : 'pragmatic',
-                  })
-                }
-                title="Switch /personality between Terse/Pragmatic and Conversational/Empathetic"
-                className="flex items-center gap-1 px-2 py-1 rounded-lg bg-[#1A2030] hover:bg-[#22293D] border border-[#2C354D] text-slate-300 transition-colors"
-              >
-                <Sliders className="w-3 h-3 text-purple-400" />
-                <span className="capitalize">{thread.personality}</span>
-              </button>
-
-              {/* Quick Skill & File Attach Buttons */}
-              <button
-                type="button"
-                onClick={() => setShowSkillPicker((v) => !v)}
-                className="px-2 py-1 rounded-lg bg-[#1A2030] hover:bg-[#22293D] border border-[#2C354D] text-purple-300 font-mono text-[11px]"
-              >
-                $skill
-              </button>
-              <button
-                type="button"
-                onClick={() => setShowFilePicker((v) => !v)}
-                className="px-2 py-1 rounded-lg bg-[#1A2030] hover:bg-[#22293D] border border-[#2C354D] text-cyan-300 font-mono text-[11px] flex items-center gap-1"
-              >
-                <Paperclip className="w-3 h-3" />
-                <span>@file</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setCreateNewWorktree((v) => !v)}
-                className={`px-2 py-1 rounded-lg border font-mono text-[11px] flex items-center gap-1 transition-colors ${
-                  createNewWorktree
-                    ? 'bg-indigo-500/20 border-indigo-500/50 text-indigo-300'
-                    : 'bg-[#1A2030] hover:bg-[#22293D] border-[#2C354D] text-slate-400'
-                }`}
-              >
-                <Plus className="w-3 h-3" />
-                <span>Worktree</span>
-              </button>
-            </div>
-
-            {/* Right Submit / Steer / Interrupt Controls */}
-            <div className="flex items-center gap-2">
-              {isRunning && (
+            {/* Official Codex Bottom Control Row: `+`, `Goal` (`/goal`), Model, Effort, Local/Worktree, Permissions, Branch, Send */}
+            <div className="flex items-center justify-between gap-2 pt-1 flex-wrap">
+              <div className="flex items-center gap-1.5 flex-wrap">
+                {/* `+` Attach File / Skill Button */}
                 <button
                   type="button"
-                  onClick={onInterruptTurn}
-                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 text-xs font-medium transition-colors"
+                  onClick={() => {
+                    setShowFilePicker((v) => !v);
+                    setShowSkillPicker(false);
+                  }}
+                  title={i18n.thread.attachContextTitle}
+                  className="p-1.5 rounded-lg codex-text-secondary codex-hover transition-colors"
                 >
-                  <Square className="w-3 h-3 fill-rose-400" />
-                  <span>Stop</span>
+                  <Plus className="w-4 h-4" />
                 </button>
-              )}
-              <button
-                type="submit"
-                disabled={!composerText.trim()}
-                className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-medium transition-all ${
-                  composerText.trim()
-                    ? isRunning
-                      ? 'bg-cyan-600 hover:bg-cyan-500 text-white shadow-sm'
-                      : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-sm'
-                    : 'bg-[#1C2130] text-slate-500 cursor-not-allowed'
-                }`}
-              >
-                {isRunning ? (
-                  <>
-                    <Compass className="w-3.5 h-3.5" />
-                    <span>Steer Turn</span>
-                  </>
+
+                {/* Goal Mode Toggle Pill (`/goal` replaces legacy `Plan`) */}
+                <button
+                  type="button"
+                  onClick={() =>
+                    setComposerMode((m) => (m === 'goal' ? 'agent' : 'goal'))
+                  }
+                  title={i18n.thread.goalButtonTitle}
+                  className={`px-2 py-1 rounded-lg text-xs font-medium flex items-center gap-1 transition-colors ${
+                    composerMode === 'goal'
+                      ? 'codex-accent-soft'
+                      : 'codex-text-secondary codex-hover'
+                  }`}
+                >
+                  <Target className="w-3.5 h-3.5" />
+                  <span>{i18n.thread.goalMode}</span>
+                </button>
+
+                {/* Model Selector */}
+                <div className="inline-flex items-center gap-1 px-2 py-1 rounded-lg codex-text-secondary codex-hover text-xs">
+                  <select
+                    value={thread.model}
+                    onChange={(e) =>
+                      onUpdateThreadConfig(thread.id, { model: e.target.value as ModelId })
+                    }
+                    className="bg-transparent text-xs font-medium codex-text-secondary hover:codex-text-primary focus:outline-none cursor-pointer"
+                  >
+                    {availableModels.map((m) => (
+                      <option key={m} value={m} className="bg-neutral-900 text-white">
+                        {m}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Reasoning Effort Selector */}
+                <div className="inline-flex items-center gap-1 px-2 py-1 rounded-lg codex-text-secondary codex-hover text-xs">
+                  <Gauge className="w-3.5 h-3.5 codex-text-muted" />
+                  <select
+                    value={thread.reasoningEffort}
+                    onChange={(e) =>
+                      onUpdateThreadConfig(thread.id, {
+                        reasoningEffort: e.target.value as ReasoningEffort,
+                      })
+                    }
+                    className="bg-transparent text-xs codex-text-secondary hover:codex-text-primary focus:outline-none cursor-pointer"
+                  >
+                    <option value="low" className="bg-neutral-900 text-white">
+                      {i18n.thread.effortLow}
+                    </option>
+                    <option value="medium" className="bg-neutral-900 text-white">
+                      {i18n.thread.effortMedium}
+                    </option>
+                    <option value="high" className="bg-neutral-900 text-white">
+                      {i18n.thread.effortHigh}
+                    </option>
+                    <option value="xhigh" className="bg-neutral-900 text-white">
+                      {i18n.thread.effortExtraHigh}
+                    </option>
+                  </select>
+                </div>
+
+                {/* Execution Target Selector: Local vs Worktree */}
+                <div className="inline-flex items-center gap-1 px-2 py-1 rounded-lg codex-text-secondary codex-hover text-xs">
+                  <Laptop className="w-3.5 h-3.5 codex-text-muted" />
+                  <select
+                    value={envMode}
+                    onChange={(e) =>
+                      onUpdateThreadConfig(thread.id, {
+                        environmentMode: e.target.value as ExecutionEnvironmentMode,
+                      })
+                    }
+                    className="bg-transparent text-xs codex-text-secondary hover:codex-text-primary focus:outline-none cursor-pointer"
+                  >
+                    <option value="local" className="bg-neutral-900 text-white">
+                      {i18n.header.local}
+                    </option>
+                    <option value="worktree" className="bg-neutral-900 text-white">
+                      {i18n.header.worktree}
+                    </option>
+                  </select>
+                </div>
+
+                {/* Permission Mode Selector */}
+                <div className="inline-flex items-center gap-1 px-2 py-1 rounded-lg codex-text-secondary codex-hover text-xs">
+                  <Shield className="w-3.5 h-3.5 codex-text-muted" />
+                  <select
+                    value={permMode}
+                    onChange={(e) =>
+                      onUpdateThreadConfig(thread.id, {
+                        permissionMode: e.target.value as PermissionMode,
+                      })
+                    }
+                    className="bg-transparent text-xs codex-text-secondary hover:codex-text-primary focus:outline-none cursor-pointer"
+                  >
+                    <option value="workspace-write" className="bg-neutral-900 text-white">
+                      {i18n.thread.permDefault}
+                    </option>
+                    <option value="read-only" className="bg-neutral-900 text-white">
+                      {i18n.thread.permReadOnly}
+                    </option>
+                    <option value="full-access" className="bg-neutral-900 text-white">
+                      {i18n.thread.permFullAccess}
+                    </option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Right Side: Branch indicator, Fork, and Circular Send / Stop Button */}
+              <div className="flex items-center gap-2">
+                <span className="hidden sm:inline-flex items-center gap-1 text-xs font-mono codex-text-muted">
+                  <GitBranch className="w-3 h-3" />
+                  <span>{thread.branch}</span>
+                </span>
+
+                <button
+                  type="button"
+                  onClick={() => onForkThread(thread.id)}
+                  title={i18n.thread.forkThread}
+                  className="p-1.5 rounded-lg codex-text-muted hover:codex-text-primary codex-hover"
+                >
+                  <GitFork className="w-3.5 h-3.5" />
+                </button>
+
+                {isRunning && !composerText.trim() ? (
+                  <button
+                    type="button"
+                    onClick={onInterruptTurn}
+                    title={i18n.thread.stopTurn}
+                    className="w-7 h-7 rounded-full bg-rose-500 hover:bg-rose-600 text-white flex items-center justify-center transition-colors shadow"
+                  >
+                    <Square className="w-3 h-3 fill-current" />
+                  </button>
                 ) : (
-                  <>
-                    <Send className="w-3.5 h-3.5" />
-                    <span>Run Agent</span>
-                  </>
+                  <button
+                    type="submit"
+                    disabled={!composerText.trim()}
+                    title={isRunning ? i18n.thread.steerActiveTurn : i18n.thread.sendPrompt}
+                    className={`w-7 h-7 rounded-full flex items-center justify-center transition-all ${
+                      composerText.trim()
+                        ? 'codex-accent-btn shadow-sm'
+                        : 'codex-card codex-text-muted opacity-50 cursor-not-allowed'
+                    }`}
+                  >
+                    <ArrowUp className="w-4 h-4" />
+                  </button>
                 )}
-              </button>
+              </div>
             </div>
-          </div>
-        </form>
+          </form>
+        </div>
       </div>
     </section>
   );

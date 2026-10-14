@@ -14,12 +14,8 @@ import readline from 'node:readline';
 
 const execAsync = promisify(exec);
 
-// Track active running child processes by turnId or threadId so user can interrupt them
 const activeTurnProcesses = new Map();
 
-/**
- * Resolve the real macOS user home directory even if $HOME is sandboxed
- */
 export function resolveRealHomeDir() {
   const username = process.env.USER || process.env.LOGNAME || 'zhangjinhui';
   const macUserHome = `/Users/${username}`;
@@ -38,13 +34,9 @@ export function resolveCodexHomeDir() {
     return process.env.CODEX_HOME;
   }
   const realHome = resolveRealHomeDir();
-  const defaultCodexHome = path.join(realHome, '.codex');
-  return defaultCodexHome;
+  return path.join(realHome, '.codex');
 }
 
-/**
- * Build a comprehensive PATH string that includes Homebrew, NVM, FNM, Bun, Cargo, Volta, etc.
- */
 export function buildAugmentedPath() {
   const realHome = resolveRealHomeDir();
   const extraDirs = [
@@ -58,9 +50,9 @@ export function buildAugmentedPath() {
     path.join(realHome, '.volta', 'bin'),
     path.join(realHome, '.npm-global', 'bin'),
     '/Applications/Codex.app/Contents/Resources',
+    '/Applications/ChatGPT.app/Contents/Resources',
   ];
 
-  // Check ~/.nvm/versions/node/*/bin
   const nvmNodesDir = path.join(realHome, '.nvm', 'versions', 'node');
   try {
     if (fsSync.existsSync(nvmNodesDir)) {
@@ -73,7 +65,6 @@ export function buildAugmentedPath() {
     // ignore
   }
 
-  // Check fnm node versions
   const fnmDirs = [
     path.join(realHome, '.local', 'share', 'fnm', 'node-versions'),
     path.join(realHome, 'Library', 'Application Support', 'fnm', 'node-versions'),
@@ -95,9 +86,6 @@ export function buildAugmentedPath() {
   return Array.from(new Set([...extraDirs, ...currentPath.split(':')])).join(':');
 }
 
-/**
- * Locate the `codex` CLI binary on the host machine
- */
 let cachedCodexBinary = null;
 
 export async function resolveCodexBinary(forceRefresh = false) {
@@ -106,7 +94,6 @@ export async function resolveCodexBinary(forceRefresh = false) {
   const augPath = buildAugmentedPath();
   const realHome = resolveRealHomeDir();
 
-  // 1. Check explicit candidate locations first
   const candidates = augPath
     .split(':')
     .filter(Boolean)
@@ -126,27 +113,30 @@ export async function resolveCodexBinary(forceRefresh = false) {
     }
   }
 
-  // 2. Ask user's login shell `zsh -lc "which codex"`
-  try {
-    const { stdout } = await execAsync('/bin/zsh -lc "which codex"', {
-      timeout: 3500,
-      env: { ...process.env, HOME: realHome, PATH: augPath },
-    });
-    const resolved = stdout.trim().split('\n')[0]?.trim();
-    if (resolved && !resolved.includes('not found') && fsSync.existsSync(resolved)) {
-      cachedCodexBinary = resolved;
-      return resolved;
+  for (const shellCmd of ['/bin/zsh -lc "which codex"', '/bin/zsh -ilc "which codex"']) {
+    try {
+      const { stdout } = await execAsync(shellCmd, {
+        timeout: 3500,
+        env: { ...process.env, HOME: realHome, PATH: augPath },
+      });
+      const lines = stdout
+        .trim()
+        .split('\n')
+        .map((l) => l.trim())
+        .filter((l) => l.startsWith('/') && !l.includes('not found'));
+      const resolved = lines[lines.length - 1];
+      if (resolved && fsSync.existsSync(resolved)) {
+        cachedCodexBinary = resolved;
+        return resolved;
+      }
+    } catch {
+      // ignore
     }
-  } catch {
-    // ignore
   }
 
   return null;
 }
 
-/**
- * Decode JWT payload safely without external dependencies
- */
 function decodeJwtPayload(jwtStr) {
   if (!jwtStr || typeof jwtStr !== 'string') return null;
   const parts = jwtStr.split('.');
@@ -167,9 +157,6 @@ function maskSecret(str) {
   return `${str.slice(0, 6)}...${str.slice(-4)}`;
 }
 
-/**
- * Lightweight TOML parser for ~/.codex/config.toml & .codex/config.toml
- */
 export function parseTomlConfig(rawToml) {
   const result = {
     model: null,
@@ -207,7 +194,7 @@ export function parseTomlConfig(rawToml) {
     if (!kvMatch) continue;
 
     const key = kvMatch[1].trim();
-    let valRaw = kvMatch[2].trim();
+    const valRaw = kvMatch[2].trim();
     let val = valRaw;
 
     if (
@@ -261,9 +248,6 @@ export function parseTomlConfig(rawToml) {
   return result;
 }
 
-/**
- * Inspect local machine's Codex authentication, CLI version, config.toml, skills, and sessions
- */
 export async function inspectLocalCodexEnvironment(workspaceRoot) {
   const realHome = resolveRealHomeDir();
   const codexHome = resolveCodexHomeDir();
@@ -298,7 +282,6 @@ export async function inspectLocalCodexEnvironment(workspaceRoot) {
     }
   }
 
-  // Read ~/.codex/auth.json
   const authJsonPath = path.join(codexHome, 'auth.json');
   let authData = {
     exists: false,
@@ -369,7 +352,6 @@ export async function inspectLocalCodexEnvironment(workspaceRoot) {
       hasTokens,
     };
   } catch {
-    // Check environment variables if auth.json wasn't readable
     const envKey = process.env.CODEX_API_KEY || process.env.OPENAI_API_KEY;
     if (envKey) {
       authData.loggedIn = true;
@@ -379,7 +361,6 @@ export async function inspectLocalCodexEnvironment(workspaceRoot) {
     }
   }
 
-  // Read ~/.codex/config.toml (Global) & <workspace>/.codex/config.toml (Project)
   const globalConfigPath = path.join(codexHome, 'config.toml');
   const projectConfigPath = path.join(workspaceRoot, '.codex', 'config.toml');
 
@@ -400,7 +381,6 @@ export async function inspectLocalCodexEnvironment(workspaceRoot) {
   const globalParsed = parseTomlConfig(globalConfigRaw);
   const projectParsed = parseTomlConfig(projectConfigRaw);
 
-  // Merge effective config (Global + Project)
   const effectiveModel =
     globalParsed.model || projectParsed.model || 'gpt-5.4';
   const effectiveProvider =
@@ -423,7 +403,6 @@ export async function inspectLocalCodexEnvironment(workspaceRoot) {
   const effectivePersonality =
     globalParsed.personality || projectParsed.personality || 'pragmatic';
 
-  // Read ~/.codex/version.json if present
   let versionJson = null;
   try {
     const rawVer = await fs.readFile(path.join(codexHome, 'version.json'), 'utf8');
@@ -432,10 +411,7 @@ export async function inspectLocalCodexEnvironment(workspaceRoot) {
     // ignore
   }
 
-  // Scan local sessions from ~/.codex/sessions & ~/.codex/history.jsonl
   const localSessions = await scanLocalCodexSessions(codexHome);
-
-  // Scan local skills from ~/.codex/skills & <workspace>/.codex/skills
   const localSkills = await scanLocalCodexSkills(codexHome, workspaceRoot);
 
   return {
@@ -485,7 +461,7 @@ export async function inspectLocalCodexEnvironment(workspaceRoot) {
 }
 
 /**
- * Scan ~/.codex/sessions/**/*.jsonl and ~/.codex/history.jsonl to import real local sessions
+ * Scan ~/.codex/sessions (.jsonl rollout files) and ~/.codex/history.jsonl to import real local sessions
  */
 async function scanLocalCodexSessions(codexHome) {
   const sessions = [];
@@ -519,7 +495,7 @@ async function scanLocalCodexSessions(codexHome) {
 
   const rolloutFiles = (await walkSessionFiles(sessionsDir))
     .sort((a, b) => b.mtimeMs - a.mtimeMs)
-    .slice(0, 20);
+    .slice(0, 15);
 
   for (const fileInfo of rolloutFiles) {
     try {
@@ -529,9 +505,7 @@ async function scanLocalCodexSessions(codexHome) {
       let cwd = null;
       let branch = 'main';
       let model = null;
-      let createdAt = new Date(fileInfo.mtimeMs).toISOString();
-      const turns = [];
-      let currentTurnItems = [];
+      const currentTurnItems = [];
 
       for (const line of lines.slice(0, 120)) {
         try {
@@ -541,7 +515,6 @@ async function scanLocalCodexSessions(codexHome) {
           if (obj.payload?.id && obj.type === 'session_meta') {
             sessionId = obj.payload.id;
             cwd = obj.payload.cwd || cwd;
-            createdAt = obj.payload.timestamp || createdAt;
             if (obj.payload.git?.branch) branch = obj.payload.git.branch;
             if (obj.payload.model) model = obj.payload.model;
           }
@@ -549,7 +522,6 @@ async function scanLocalCodexSessions(codexHome) {
           if (obj.git?.branch) branch = obj.git.branch;
           if (obj.model) model = obj.model;
 
-          // Extract user / assistant messages from rollout records
           const payload = obj.payload || obj;
           if (
             payload.type === 'message' ||
@@ -568,7 +540,7 @@ async function scanLocalCodexSessions(codexHome) {
 
             if (textContent && !textContent.startsWith('<environment_context>')) {
               currentTurnItems.push({
-                id: `item_${ turns.length }_${ currentTurnItems.length }`,
+                id: `item_${currentTurnItems.length}`,
                 type: role === 'user' ? 'userMessage' : 'agentMessage',
                 status: 'completed',
                 timestamp: new Date(fileInfo.mtimeMs).toTimeString().split(' ')[0],
@@ -591,14 +563,14 @@ async function scanLocalCodexSessions(codexHome) {
             });
           }
         } catch {
-          // ignore malformed line
+          // ignore
         }
       }
 
       const firstUserItem = currentTurnItems.find((i) => i.type === 'userMessage');
       const title = firstUserItem?.text
         ? firstUserItem.text.split('\n')[0].slice(0, 68)
-        : `Session ${sessionId.slice(-8)}`;
+        : `CLI 会话 ${sessionId.slice(-8)}`;
 
       sessions.push({
         id: `local_${sessionId}`,
@@ -608,49 +580,12 @@ async function scanLocalCodexSessions(codexHome) {
         projectName: cwd ? path.basename(cwd) : 'codex-local',
         branch,
         model: model || 'gpt-5.4',
-        updatedAt: new Date(fileInfo.mtimeMs).toLocaleString(),
+        updatedAt: new Date(fileInfo.mtimeMs).toLocaleTimeString([], {
+          hour: '2-digit',
+          minute: '2-digit',
+        }),
         mtimeMs: fileInfo.mtimeMs,
         items: currentTurnItems.slice(0, 24),
-      });
-    } catch {
-      // ignore
-    }
-  }
-
-  // Also check ~/.codex/history.jsonl if sessions directory was empty
-  if (sessions.length === 0) {
-    try {
-      const historyRaw = await fs.readFile(path.join(codexHome, 'history.jsonl'), 'utf8');
-      const lines = historyRaw.split(/\r?\n/).filter(Boolean).slice(-15).reverse();
-      lines.forEach((line, idx) => {
-        try {
-          const item = JSON.parse(line);
-          const text = item.text || item.prompt || item.input;
-          if (text) {
-            sessions.push({
-              id: `hist_${item.session_id || idx}`,
-              cliSessionId: item.session_id || null,
-              title: String(text).split('\n')[0].slice(0, 68),
-              cwd: item.cwd || resolveRealHomeDir(),
-              projectName: item.cwd ? path.basename(item.cwd) : 'local-history',
-              branch: 'main',
-              model: 'gpt-5.4',
-              updatedAt: item.ts ? new Date(item.ts * 1000).toLocaleString() : 'Recent',
-              mtimeMs: Date.now() - idx * 60000,
-              items: [
-                {
-                  id: `hist_usr_${idx}`,
-                  type: 'userMessage',
-                  status: 'completed',
-                  timestamp: 'Recent',
-                  text: String(text),
-                },
-              ],
-            });
-          }
-        } catch {
-          // ignore
-        }
       });
     } catch {
       // ignore
@@ -660,9 +595,6 @@ async function scanLocalCodexSessions(codexHome) {
   return sessions;
 }
 
-/**
- * Scan ~/.codex/skills and <workspace>/.codex/skills for SKILL.md bundles
- */
 async function scanLocalCodexSkills(codexHome, workspaceRoot) {
   const skills = [];
   const searchRoots = [
@@ -683,7 +615,7 @@ async function scanLocalCodexSkills(codexHome, workspaceRoot) {
           const descMatch = content.match(/description:\s*(.+)/);
           const slug = (nameMatch ? nameMatch[1].trim() : entry.name).replace(/^["']|["']$/g, '');
           const description = (
-            descMatch ? descMatch[1].trim() : `Local skill from ${root.scope}`
+            descMatch ? descMatch[1].trim() : `本机技能 (${root.scope})`
           ).replace(/^["']|["']$/g, '');
 
           skills.push({
@@ -701,7 +633,7 @@ async function scanLocalCodexSkills(codexHome, workspaceRoot) {
             builtIn: root.scope.includes('system'),
             path: skillMdPath,
             content,
-            samplePrompt: `Use $${slug} on this project.`,
+            samplePrompt: `使用 $${slug} 处理当前项目任务。`,
             tags: [root.scope],
           });
         } catch {
@@ -716,9 +648,6 @@ async function scanLocalCodexSkills(codexHome, workspaceRoot) {
   return skills;
 }
 
-/**
- * Parse unified `git diff` output into structured FileDiff[] objects
- */
 export function parseUnifiedGitDiff(rawDiff, stagedPaths = new Set()) {
   if (!rawDiff || !rawDiff.trim()) return [];
   const files = [];
@@ -799,9 +728,6 @@ export function parseUnifiedGitDiff(rawDiff, stagedPaths = new Set()) {
   return files;
 }
 
-/**
- * Inspect real Git status, branch, worktrees, and diffs for a project directory
- */
 export async function inspectGitRepository(cwd) {
   const augPath = buildAugmentedPath();
   const execOpts = {
@@ -852,7 +778,6 @@ export async function inspectGitRepository(cwd) {
 
   const changedFiles = parseUnifiedGitDiff(combinedDiffRaw, stagedPaths);
 
-  // Also parse `git worktree list --porcelain`
   const worktrees = [];
   try {
     const { stdout } = await execAsync('git worktree list --porcelain', execOpts);
@@ -908,7 +833,7 @@ export async function inspectGitRepository(cwd) {
 }
 
 /**
- * Stream a real turn via local `codex exec --json` (or direct configured provider API fallback)
+ * Stream a real turn via local `codex exec --json` with Goal mode (/goal) support
  */
 export async function streamLocalCodexTurn(reqBody, res) {
   const {
@@ -922,7 +847,8 @@ export async function streamLocalCodexTurn(reqBody, res) {
     reasoningEffort = 'high',
     sandboxMode = 'workspace-write',
     cwd,
-    mode = 'agent', // 'agent' | 'plan' | 'review'
+    mode = 'agent', // 'agent' | 'goal' | 'review'
+    activeGoal = null,
   } = reqBody;
 
   res.writeHead(200, {
@@ -944,13 +870,15 @@ export async function streamLocalCodexTurn(reqBody, res) {
   const augPath = buildAugmentedPath();
   const codexBin = await resolveCodexBinary();
   const targetCwd = cwd && fsSync.existsSync(cwd) ? cwd : process.cwd();
+  const envStatus = await inspectLocalCodexEnvironment(targetCwd);
+  const configDefaultModel = envStatus.config?.effective?.model;
 
-  // Build full prompt including any @attachedFiles or $invokedSkills or /plan /review mode prefix
   let composedPrompt = prompt || '';
-  if (mode === 'plan' && !composedPrompt.toLowerCase().startsWith('plan:')) {
-    composedPrompt = `[Plan Mode: Inspect the repository and propose a clear step-by-step implementation plan without modifying files yet.]\n\n${composedPrompt}`;
+  if (mode === 'goal' || activeGoal) {
+    const goalText = activeGoal || prompt;
+    composedPrompt = `[Persistent Goal (/goal): ${goalText}]\n[Instruction: Pursue this objective systematically. Inspect files, apply necessary edits, run verification commands, and report progress clearly.]\n\n${composedPrompt}`;
   } else if (mode === 'review') {
-    composedPrompt = `[Code Review Mode: Review the current uncommitted git diff for bugs, regressions, security risks, and missing tests.]\n\n${composedPrompt}`;
+    composedPrompt = `[Code Review Mode (/review): Inspect the current uncommitted git diff for bugs, regressions, security risks, and missing tests.]\n\n${composedPrompt}`;
   }
   if (invokedSkills.length > 0) {
     composedPrompt = `Use skills: ${invokedSkills.map((s) => `$${s}`).join(', ')}\n${composedPrompt}`;
@@ -960,19 +888,18 @@ export async function streamLocalCodexTurn(reqBody, res) {
   }
 
   if (codexBin) {
-    // Map UI sandbox mode to valid `codex exec` --sandbox flag
     const cliSandbox =
-      mode === 'plan' || mode === 'review' || sandboxMode === 'read-only'
+      mode === 'review' || sandboxMode === 'read-only'
         ? 'read-only'
         : sandboxMode === 'full-access' || sandboxMode === 'danger-full-access'
         ? 'danger-full-access'
         : 'workspace-write';
 
-    // Map reasoning effort (`low` | `medium` | `high` | `xhigh`)
+    // Map reasoning effort safely (`low` | `medium` | `high`)
     const cliEffort =
-      reasoningEffort === 'max' || reasoningEffort === 'xhigh'
-        ? 'xhigh'
-        : reasoningEffort || 'high';
+      reasoningEffort === 'low' || reasoningEffort === 'medium'
+        ? reasoningEffort
+        : 'high';
 
     const args = ['exec'];
     if (cliSessionId) {
@@ -984,7 +911,9 @@ export async function streamLocalCodexTurn(reqBody, res) {
       args.push('-C', targetCwd);
       args.push('-s', cliSandbox);
     }
-    if (model && model !== 'default') {
+
+    // Only pass -m if user explicitly chose a model different from their ~/.codex/config.toml default
+    if (model && model !== 'default' && model !== configDefaultModel) {
       args.push('-m', model);
     }
     args.push('-c', `model_reasoning_effort="${cliEffort}"`);
@@ -992,7 +921,7 @@ export async function streamLocalCodexTurn(reqBody, res) {
 
     emitEvent({
       type: 'bridge.info',
-      message: `Executing local Codex CLI: ${codexBin} ${args.slice(0, -1).join(' ')}`,
+      message: `本机 Codex CLI 执行: ${path.basename(codexBin)} ${args.slice(0, -1).join(' ')}`,
       binaryPath: codexBin,
       cwd: targetCwd,
     });
@@ -1026,7 +955,6 @@ export async function streamLocalCodexTurn(reqBody, res) {
         }
         emitEvent(parsed);
       } catch {
-        // Plain text line emitted on stdout
         emitEvent({
           type: 'stdout.line',
           text: trimmed,
@@ -1058,20 +986,17 @@ export async function streamLocalCodexTurn(reqBody, res) {
       });
     });
 
-    // If the CLI exited with an error (e.g., unsupported model name in user's account) and produced no agent_message,
-    // surface the exact CLI output so the user sees what local Codex reported.
     if (!receivedAgentMessage && stderrBuffer.trim()) {
       emitEvent({
         type: 'item.completed',
         item: {
           id: `item_diag_${Date.now()}`,
           type: 'agent_message',
-          text: `**Local Codex CLI Output (${path.basename(codexBin)}):**\n\`\`\`\n${stderrBuffer.trim().slice(-2000)}\n\`\`\``,
+          text: `**本机 Codex CLI 执行输出 (${path.basename(codexBin)}):**\n\`\`\`\n${stderrBuffer.trim().slice(-2000)}\n\`\`\``,
         },
       });
     }
 
-    // Inspect git repository after turn finishes to send updated diffs
     const gitState = await inspectGitRepository(targetCwd);
     emitEvent({
       type: 'git.state',
@@ -1083,29 +1008,26 @@ export async function streamLocalCodexTurn(reqBody, res) {
     return;
   }
 
-  // Fallback when `codex` binary is not found in PATH:
-  // Inspect local workspace & git state and inform user how local bridge is configured
-  emitEvent({
-    type: 'turn.started',
-  });
+  // Fallback workspace inspection when `codex` binary is not reachable in current environment
+  emitEvent({ type: 'turn.started' });
+  const gitState = await inspectGitRepository(targetCwd);
 
   emitEvent({
     type: 'item.completed',
     item: {
       id: `item_reason_${Date.now()}`,
       type: 'reasoning',
-      text: `Checked local Codex environment at ${resolveCodexHomeDir()} and workspace ${targetCwd}.`,
+      text: `已检查本机配置目录 ${resolveCodexHomeDir()} 与工作区 ${targetCwd} (分支: ${gitState.branch})。`,
     },
   });
 
-  const gitState = await inspectGitRepository(targetCwd);
   emitEvent({
     type: 'item.completed',
     item: {
       id: `item_cmd_${Date.now()}`,
       type: 'command_execution',
       command: 'git status --short && git branch --show-current',
-      aggregated_output: `Branch: ${gitState.branch}\nChanged files: ${gitState.changedFiles.length} (+${gitState.diffSummary.additions} -${gitState.diffSummary.deletions})`,
+      aggregated_output: `当前分支: ${gitState.branch}\n变更文件数: ${gitState.changedFiles.length} (+${gitState.diffSummary.additions} -${gitState.diffSummary.deletions})`,
       exit_code: 0,
       status: 'completed',
     },
@@ -1116,15 +1038,11 @@ export async function streamLocalCodexTurn(reqBody, res) {
     item: {
       id: `item_msg_${Date.now()}`,
       type: 'agent_message',
-      text: `I inspected your local workspace (\`${targetCwd}\` on branch \`${gitState.branch}\`).\n\n> **Note:** The local \`codex\` CLI binary was not detected in standard macOS paths during this request. Make sure \`@openai/codex\` is installed (\`npm i -g @openai/codex\` or \`brew install codex\`) and logged in via \`codex login\`. Once installed, every prompt sent here will directly invoke your local \`codex exec --json\` process using your \`~/.codex/auth.json\` and \`~/.codex/config.toml\`!`,
+      text: `已检查本地工作区（\`${targetCwd}\`，分支 \`${gitState.branch}\`）。当前未在标准路径检测到 \`codex\` CLI 可执行文件，请确认已在终端安装并登录 \`codex\`。`,
     },
   });
 
-  emitEvent({
-    type: 'git.state',
-    git: gitState,
-  });
-
+  emitEvent({ type: 'git.state', git: gitState });
   emitEvent({
     type: 'turn.completed',
     usage: { input_tokens: 512, cached_input_tokens: 0, output_tokens: 128 },
@@ -1147,9 +1065,6 @@ export function interruptLocalCodexTurn(turnIdOrThreadId) {
   return false;
 }
 
-/**
- * Open a project or file in a macOS Editor / Terminal app (`Cursor`, `VS Code`, `Windsurf`, `Zed`, `Ghostty`, `iTerm`, `Terminal`, `Finder`)
- */
 export async function openInMacApp(targetPath, appId = 'cursor') {
   const augPath = buildAugmentedPath();
   const safeTarget = targetPath || process.cwd();
