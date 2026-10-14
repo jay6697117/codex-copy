@@ -2,7 +2,7 @@
 
 - 任务标识：`01a13985-1358-7571-8d6b-3ba6d27cd84c`
 - 原始目标：`@Sites 部署 所有人可见`
-- 当前阶段：Plan；等待明确部署对象。
+- 当前阶段：目标已恢复为 active；等待明确部署对象，重新进行阻塞审计。
 - 工作目录：`/Users/zhangjinhui/Desktop/codex-test`
 
 ## 阶段
