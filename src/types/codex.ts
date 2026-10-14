@@ -1,13 +1,16 @@
 export type CodexSurface = 'codex' | 'work' | 'chat';
 
+export type ThemeSkin = 'codex-dark' | 'macos-light' | 'aurora-midnight';
+
 export type NavSection =
   | 'threads'
-  | 'review_queue'
-  | 'skills'
   | 'automations'
+  | 'skills'
+  | 'review_queue'
   | 'worktrees'
   | 'subagents'
-  | 'sandbox';
+  | 'sandbox'
+  | 'codex_config';
 
 export type RightPanelTab = 'diff' | 'files' | 'terminal' | 'preview' | 'worktrees';
 
@@ -17,19 +20,82 @@ export type WorkspaceLayoutMode =
   | 'focus_chat'
   | 'review_zen';
 
-export type ModelId =
-  | 'gpt-6.1-sol'
-  | 'gpt-6-luna'
-  | 'gpt-5.3-codex'
-  | 'o4-mini-high';
+export type ModelId = string; // Supports any model from ~/.codex/config.toml or official catalog
 
 export type PersonalityMode = 'pragmatic' | 'empathetic';
 
 export type ReasoningEffort = 'low' | 'medium' | 'high' | 'max';
 
+export type ComposerMode = 'agent' | 'plan' | 'goal' | 'review';
+
+export type ExecutionEnvironmentMode = 'local' | 'worktree';
+
+export type PermissionMode = 'workspace-write' | 'read-only' | 'full-access';
+
+export interface LocalCodexSessionSummary {
+  id: string;
+  cliSessionId: string | null;
+  title: string;
+  cwd: string;
+  projectName: string;
+  branch: string;
+  model: string;
+  updatedAt: string;
+  mtimeMs: number;
+  items: TurnItem[];
+}
+
+export interface LocalCodexStatus {
+  codexHome: string;
+  realHome: string;
+  workspaceRoot: string;
+  cli: {
+    installed: boolean;
+    binaryPath: string | null;
+    version: string | null;
+    loginStatusText: string;
+  };
+  auth: {
+    exists: boolean;
+    path: string;
+    authMode: string | null;
+    loggedIn: boolean;
+    email: string | null;
+    name: string | null;
+    planType: string | null;
+    accountId: string | null;
+    lastRefresh: string | null;
+    hasApiKey: boolean;
+    maskedApiKey: string | null;
+    hasTokens: boolean;
+  };
+  config: {
+    globalConfigPath: string;
+    globalConfigExists: boolean;
+    globalConfigRaw: string;
+    projectConfigPath: string;
+    projectConfigExists: boolean;
+    projectConfigRaw: string;
+    effective: {
+      model: string;
+      modelProvider: string;
+      reasoningEffort: string;
+      approvalPolicy: string;
+      sandboxMode: string;
+      personality: string;
+      modelProviders: Record<string, Record<string, unknown>>;
+      mcpServers: Record<string, Record<string, unknown>>;
+      projects: Record<string, Record<string, unknown>>;
+      profiles: Record<string, Record<string, unknown>>;
+    };
+  };
+  localSessions: LocalCodexSessionSummary[];
+  localSkills: SkillDefinition[];
+}
+
 export interface SubagentConfig {
   id: string;
-  name: string; // e.g., 'default' | 'worker' | 'explorer'
+  name: string;
   description: string;
   model: ModelId;
   sandboxMode: 'read-only' | 'workspace-write' | 'full-access';
@@ -117,29 +183,23 @@ export interface TurnItem {
   type: TurnItemType;
   status: TurnItemStatus;
   timestamp: string;
-  // userMessage / steerMessage / agentMessage
   text?: string;
   attachedFiles?: string[];
   invokedSkills?: string[];
-  // reasoning
   durationSeconds?: number;
   reasoningSteps?: string[];
-  // subagentRun
   subagentName?: string;
   subagentTask?: string;
   subagentTokens?: string;
-  // commandExecution
   command?: string;
   cwd?: string;
   exitCode?: number;
   stdout?: string;
-  // fileChange
   filePath?: string;
   changeType?: 'modified' | 'added' | 'deleted';
   additions?: number;
   deletions?: number;
   summary?: string;
-  // approvalRequest
   approvalId?: string;
   approvalCommand?: string;
   approvalReason?: string;
@@ -162,12 +222,17 @@ export interface Turn {
 
 export interface Thread {
   id: string;
+  cliSessionId?: string | null;
   projectId: string;
   title: string;
   pinned?: boolean;
+  isLocalCliSession?: boolean;
   status: 'idle' | 'running' | 'waiting_approval' | 'completed' | 'archived';
   worktreeId: string;
   branch: string;
+  cwd?: string;
+  environmentMode?: ExecutionEnvironmentMode;
+  permissionMode?: PermissionMode;
   model: ModelId;
   personality: PersonalityMode;
   reasoningEffort: ReasoningEffort;
@@ -195,7 +260,14 @@ export interface SkillDefinition {
   id: string;
   slug: string;
   name: string;
-  category: 'Engineering' | 'Design & UI' | 'Project Ops' | 'Cloud & DevOps' | 'Creative & Games' | 'Documents';
+  category:
+    | 'Local User Skill'
+    | 'Engineering'
+    | 'Design & UI'
+    | 'Project Ops'
+    | 'Cloud & DevOps'
+    | 'Creative & Games'
+    | 'Documents';
   description: string;
   author: string;
   version: string;
@@ -247,7 +319,7 @@ export interface SandboxPolicy {
   networkAccess: 'disabled' | 'cached-web' | 'enabled';
   approvalPolicy: 'on-risk' | 'always-ask' | 'auto-allow-safe' | 'never';
   allowedCommands: string[];
-  harnessMode: 'hybrid_simulator' | 'local_app_server_cli' | 'openai_compatible_api';
+  harnessMode: 'local_app_server_cli' | 'hybrid_simulator' | 'openai_compatible_api';
   apiEndpoint: string;
   apiKey: string;
   appServerPort: number;

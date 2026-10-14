@@ -1,17 +1,41 @@
 import {
+  ComposerMode,
+  FileDiff,
   FileTreeNode,
   JsonRpcLogEntry,
+  LocalCodexStatus,
   ModelId,
   PersonalityMode,
   ReasoningEffort,
   SandboxPolicy,
   TurnItem,
-  FileDiff,
+  WorktreeInfo,
 } from '../types/codex';
 
-const API_BASE = 'http://127.0.0.1:4500';
+const FALLBACK_PORT_BASE = 'http://127.0.0.1:4500';
 
 let rpcRequestId = 100;
+
+async function fetchWithFallback(pathAndQuery: string, init?: RequestInit): Promise<Response> {
+  // 1. Try relative URL first (handled by Vite dev middleware or same-origin server)
+  try {
+    const res = await fetch(pathAndQuery, init);
+    if (res.ok || res.status === 400 || res.status === 403 || res.status === 404) {
+      const contentType = res.headers.get('content-type') || '';
+      if (
+        contentType.includes('application/json') ||
+        contentType.includes('application/x-ndjson')
+      ) {
+        return res;
+      }
+    }
+  } catch {
+    // fallback to port 4500
+  }
+
+  // 2. Fallback to standalone app-server on port 4500 (e.g., Electron file:// mode)
+  return fetch(`${FALLBACK_PORT_BASE}${pathAndQuery}`, init);
+}
 
 export async function checkAppServerHealth(): Promise<{
   connected: boolean;
@@ -19,12 +43,148 @@ export async function checkAppServerHealth(): Promise<{
   version?: string;
 }> {
   try {
-    const res = await fetch(`${API_BASE}/readyz`, { signal: AbortSignal.timeout(1500) });
+    const res = await fetchWithFallback('/readyz', { signal: AbortSignal.timeout(2000) });
     if (!res.ok) return { connected: false };
     const data = await res.json();
-    return { connected: true, version: data.version || '0.160.0' };
+    return {
+      connected: true,
+      workspace: data.workspace,
+      version: data.version || '0.160.0',
+    };
   } catch {
     return { connected: false };
+  }
+}
+
+export async function fetchLocalCodexStatus(cwd?: string): Promise<LocalCodexStatus | null> {
+  try {
+    const query = cwd ? `?cwd=${encodeURIComponent(cwd)}` : '';
+    const res = await fetchWithFallback(`/api/codex/status${query}`, {
+      signal: AbortSignal.timeout(6000),
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+export async function saveLocalCodexConfig(
+  scope: 'global' | 'project',
+  content: string
+): Promise<{ ok: boolean; path?: string; status?: LocalCodexStatus; error?: string }> {
+  try {
+    const res = await fetchWithFallback('/api/codex/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scope, content }),
+    });
+    return await res.json();
+  } catch (err) {
+    return { ok: false, error: String(err) };
+  }
+}
+
+export async function fetchGitStatus(cwd?: string): Promise<{
+  cwd: string;
+  branch: string;
+  changedFiles: FileDiff[];
+  diffSummary: { files: number; additions: number; deletions: number };
+  worktrees: WorktreeInfo[];
+} | null> {
+  try {
+    const query = cwd ? `?cwd=${encodeURIComponent(cwd)}` : '';
+    const res = await fetchWithFallback(`/api/git/status${query}`, {
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+export async function stageGitFile(
+  filePath: string,
+  stage: boolean,
+  cwd?: string
+): Promise<{ ok: boolean; git?: any }> {
+  try {
+    const res = await fetchWithFallback('/api/git/stage', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filePath, stage, cwd }),
+    });
+    return await res.json();
+  } catch {
+    return { ok: false };
+  }
+}
+
+export async function revertGitFile(
+  filePath: string,
+  cwd?: string
+): Promise<{ ok: boolean; git?: any }> {
+  try {
+    const res = await fetchWithFallback('/api/git/revert', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filePath, cwd }),
+    });
+    return await res.json();
+  } catch {
+    return { ok: false };
+  }
+}
+
+export async function commitGitChanges(
+  message: string,
+  push = false,
+  cwd?: string
+): Promise<{ ok: boolean; stdout?: string; error?: string; git?: any }> {
+  try {
+    const res = await fetchWithFallback('/api/git/commit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message, push, cwd }),
+    });
+    return await res.json();
+  } catch (err) {
+    return { ok: false, error: String(err) };
+  }
+}
+
+export async function manageGitWorktree(
+  action: 'create' | 'remove',
+  branchName?: string,
+  worktreePath?: string,
+  cwd?: string
+): Promise<{ ok: boolean; worktreePath?: string; branch?: string; git?: any; error?: string }> {
+  try {
+    const res = await fetchWithFallback('/api/git/worktree', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, branchName, worktreePath, cwd }),
+    });
+    return await res.json();
+  } catch (err) {
+    return { ok: false, error: String(err) };
+  }
+}
+
+export async function openInExternalApp(
+  targetPath: string,
+  appId = 'cursor'
+): Promise<{ ok: boolean; openedWith?: string; error?: string }> {
+  try {
+    const res = await fetchWithFallback('/api/open-in', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targetPath, appId }),
+    });
+    return await res.json();
+  } catch (err) {
+    return { ok: false, error: String(err) };
   }
 }
 
@@ -47,11 +207,11 @@ export async function sendJsonRpcRequest(
   });
 
   try {
-    const res = await fetch(`${API_BASE}/api/rpc`, {
+    const res = await fetchWithFallback('/api/rpc', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(requestPayload),
-      signal: AbortSignal.timeout(3000),
+      signal: AbortSignal.timeout(4000),
     });
     if (res.ok) {
       const json = await res.json();
@@ -66,34 +226,18 @@ export async function sendJsonRpcRequest(
       return json;
     }
   } catch {
-    // Fallback to embedded in-memory JSON-RPC response when running in pure static mode
+    // Fallback
   }
 
-  const simulatedReply = {
-    id,
-    result: {
-      ok: true,
-      method,
-      simulatedBy: 'embedded-codex-harness',
-      params,
-    },
-  };
-
-  onLog?.({
-    id: `rpc_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-    timestamp:
-      new Date().toTimeString().split(' ')[0] + '.' + String(Date.now() % 1000).padStart(3, '0'),
-    direction: 'server->client',
-    method: `${method}:result`,
-    payload: simulatedReply,
-  });
-
-  return simulatedReply;
+  return { id, result: { ok: true, method, params } };
 }
 
-export async function fetchWorkspaceFileTree(): Promise<FileTreeNode[]> {
+export async function fetchWorkspaceFileTree(dir?: string): Promise<FileTreeNode[]> {
   try {
-    const res = await fetch(`${API_BASE}/api/fs/tree`, { signal: AbortSignal.timeout(2000) });
+    const query = dir ? `?dir=${encodeURIComponent(dir)}` : '';
+    const res = await fetchWithFallback(`/api/fs/tree${query}`, {
+      signal: AbortSignal.timeout(3000),
+    });
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data.tree) && data.tree.length > 0) {
@@ -101,161 +245,37 @@ export async function fetchWorkspaceFileTree(): Promise<FileTreeNode[]> {
       }
     }
   } catch {
-    // Fallback tree below
+    // ignore
   }
-
-  return [
-    {
-      name: '.codex',
-      path: '.codex',
-      type: 'directory',
-      children: [
-        { name: 'config.toml', path: '.codex/config.toml', type: 'file', size: 616 },
-        {
-          name: 'agents',
-          path: '.codex/agents',
-          type: 'directory',
-          children: [
-            { name: 'default.toml', path: '.codex/agents/default.toml', type: 'file', size: 499 },
-            { name: 'worker.toml', path: '.codex/agents/worker.toml', type: 'file', size: 376 },
-            { name: 'explorer.toml', path: '.codex/agents/explorer.toml', type: 'file', size: 340 },
-          ],
-        },
-        {
-          name: 'skills',
-          path: '.codex/skills',
-          type: 'directory',
-          children: [
-            {
-              name: 'develop-web-game/SKILL.md',
-              path: '.codex/skills/develop-web-game/SKILL.md',
-              type: 'file',
-              size: 744,
-            },
-            {
-              name: 'figma-design-to-code/SKILL.md',
-              path: '.codex/skills/figma-design-to-code/SKILL.md',
-              type: 'file',
-              size: 680,
-            },
-            {
-              name: 'linear-triage/SKILL.md',
-              path: '.codex/skills/linear-triage/SKILL.md',
-              type: 'file',
-              size: 700,
-            },
-            {
-              name: 'cloud-deploy/SKILL.md',
-              path: '.codex/skills/cloud-deploy/SKILL.md',
-              type: 'file',
-              size: 642,
-            },
-          ],
-        },
-      ],
-    },
-    {
-      name: 'electron',
-      path: 'electron',
-      type: 'directory',
-      children: [
-        { name: 'main.cjs', path: 'electron/main.cjs', type: 'file', size: 3545 },
-        { name: 'preload.cjs', path: 'electron/preload.cjs', type: 'file', size: 762 },
-      ],
-    },
-    {
-      name: 'server',
-      path: 'server',
-      type: 'directory',
-      children: [{ name: 'app-server.mjs', path: 'server/app-server.mjs', type: 'file', size: 11183 }],
-    },
-    {
-      name: 'src',
-      path: 'src',
-      type: 'directory',
-      children: [
-        { name: 'App.tsx', path: 'src/App.tsx', type: 'file', size: 18420 },
-        { name: 'types/codex.ts', path: 'src/types/codex.ts', type: 'file', size: 5992 },
-        {
-          name: 'services/appServerClient.ts',
-          path: 'src/services/appServerClient.ts',
-          type: 'file',
-          size: 9200,
-        },
-        {
-          name: 'components/TopCommandBar.tsx',
-          path: 'src/components/TopCommandBar.tsx',
-          type: 'file',
-          size: 7400,
-        },
-        {
-          name: 'components/LeftSidebar.tsx',
-          path: 'src/components/LeftSidebar.tsx',
-          type: 'file',
-          size: 11200,
-        },
-        {
-          name: 'components/CenterThreadView.tsx',
-          path: 'src/components/CenterThreadView.tsx',
-          type: 'file',
-          size: 19600,
-        },
-        {
-          name: 'components/RightInspectorPane.tsx',
-          path: 'src/components/RightInspectorPane.tsx',
-          type: 'file',
-          size: 24500,
-        },
-        {
-          name: 'components/MainFeatureViews.tsx',
-          path: 'src/components/MainFeatureViews.tsx',
-          type: 'file',
-          size: 22100,
-        },
-      ],
-    },
-    { name: 'AGENTS.md', path: 'AGENTS.md', type: 'file', size: 1375 },
-    { name: 'CODEX_DESKTOP_PLAN.md', path: 'CODEX_DESKTOP_PLAN.md', type: 'file', size: 9191 },
-    { name: 'package.json', path: 'package.json', type: 'file', size: 1047 },
-  ];
+  return [];
 }
-
-const FALLBACK_FILE_CONTENTS: Record<string, string> = {
-  'AGENTS.md': `# AGENTS.md — Codex Workspace Rules & Subagent Guidelines\n\n## 1. Repository Overview\nThis repository (\`codex-desktop-app\`) implements the **OpenAI Codex Desktop App ("Command Center for Agents")** using Electron, React 19, TypeScript, Tailwind CSS, and a bidirectional JSON-RPC 2.0 Lite \`app-server\` harness.\n\n## 2. Subagent Routing\n- \`explorer\`: Fast read-only codebase indexing and symbol search.\n- \`worker\`: Isolated code implementation and test generation in Git worktrees.\n- \`default\`: Primary orchestrator that coordinates subagents and reviews diffs.\n`,
-  '.codex/config.toml': `# OpenAI Codex Configuration (.codex/config.toml)\nmodel = "gpt-6.1-sol"\npersonality = "pragmatic"\nreasoning_effort = "high"\n\n[sandbox]\nmode = "workspace-write"\nnetwork_access = false\napproval_policy = "on-risk"\n\n[agents]\nenable_subagents = true\nmax_concurrent_threads_per_session = 6\n`,
-  'package.json': `{\n  "name": "codex-desktop-app",\n  "version": "1.0.0",\n  "description": "OpenAI Codex Desktop App — Multi-Agent Command Center"\n}\n`,
-};
 
 export async function readWorkspaceFile(filePath: string): Promise<string> {
   try {
-    const res = await fetch(`${API_BASE}/api/fs/read?path=${encodeURIComponent(filePath)}`, {
-      signal: AbortSignal.timeout(2000),
+    const res = await fetchWithFallback(`/api/fs/read?path=${encodeURIComponent(filePath)}`, {
+      signal: AbortSignal.timeout(3000),
     });
     if (res.ok) {
       const data = await res.json();
       if (typeof data.content === 'string') return data.content;
     }
   } catch {
-    // Fallback
+    // ignore
   }
-  return (
-    FALLBACK_FILE_CONTENTS[filePath] ||
-    `// File: ${filePath}\n// Loaded in Codex Workspace Explorer\n// Connect to local app-server (npm run server) for live disk sync.\n`
-  );
+  return `// File: ${filePath}\n`;
 }
 
 export async function writeWorkspaceFile(filePath: string, content: string): Promise<boolean> {
-  FALLBACK_FILE_CONTENTS[filePath] = content;
   try {
-    const res = await fetch(`${API_BASE}/api/fs/write`, {
+    const res = await fetchWithFallback('/api/fs/write', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path: filePath, content }),
-      signal: AbortSignal.timeout(2000),
+      signal: AbortSignal.timeout(3000),
     });
     return res.ok;
   } catch {
-    return true;
+    return false;
   }
 }
 
@@ -264,59 +284,50 @@ export async function executeTerminalCommand(
   cwd?: string
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   try {
-    const res = await fetch(`${API_BASE}/api/terminal/exec`, {
+    const res = await fetchWithFallback('/api/terminal/exec', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ command, cwd }),
-      signal: AbortSignal.timeout(8000),
+      signal: AbortSignal.timeout(25000),
     });
     if (res.ok) {
       return await res.json();
     }
-  } catch {
-    // Fallback simulated shell output for offline/browser preview
-  }
-
-  const trimmed = command.trim();
-  if (trimmed === 'git status' || trimmed === 'git status --short') {
+  } catch (err) {
     return {
-      exitCode: 0,
-      stdout: `On branch main\nYour branch is ahead of 'origin/main' by 2 commits.\n\nChanges not staged for commit:\n  modified:   src/components/RightInspectorPane.tsx\n  modified:   server/app-server.mjs\n`,
-      stderr: '',
+      exitCode: 1,
+      stdout: '',
+      stderr: String(err),
     };
   }
-  if (trimmed.startsWith('git worktree list')) {
-    return {
-      exitCode: 0,
-      stdout: `/Users/zhangjinhui/Desktop/codex-test                                  a8f4c21 [main]\n/Users/zhangjinhui/Desktop/codex-test/.codex/worktrees/jsonrpc-app-server  e91d04b [feat/jsonrpc-app-server]\n/Users/zhangjinhui/Desktop/codex-test/.codex/worktrees/dark-glass-ui       7c3b910 [feat/dark-glass-ui]\n/Users/zhangjinhui/Desktop/codex-test/.codex/worktrees/voxel-drift-boost   3f92a7c [feat/drift-boost-tiers]\n`,
-      stderr: '',
-    };
-  }
-  if (trimmed.startsWith('codex')) {
-    return {
-      exitCode: 0,
-      stdout: `codex-cli 0.160.0 (app-server protocol v2, JSON-RPC 2.0 Lite over stdio/ws)\nActive models: gpt-6.1-sol (default), gpt-6-luna (explorer), gpt-5.3-codex\nSubagents enabled: default, worker, explorer\n`,
-      stderr: '',
-    };
-  }
-
-  return {
-    exitCode: 0,
-    stdout: `[codex-sandbox-shell] Executed: ${command}\nExit status: 0 (OK)\n`,
-    stderr: '',
-  };
+  return { exitCode: 0, stdout: '', stderr: '' };
 }
 
 export interface StreamTurnCallbacks {
+  onCliThreadStarted?: (cliSessionId: string) => void;
   onItemAdded: (item: TurnItem) => void;
   onItemUpdated: (itemId: string, updater: (prev: TurnItem) => TurnItem) => void;
   onDiffGenerated: (fileDiff: FileDiff) => void;
-  onTurnStatusChange: (status: 'in_progress' | 'waiting_approval' | 'completed' | 'interrupted') => void;
+  onGitStateUpdated?: (gitState: {
+    branch: string;
+    changedFiles: FileDiff[];
+    diffSummary: { files: number; additions: number; deletions: number };
+    worktrees: WorktreeInfo[];
+  }) => void;
+  onTurnStatusChange: (
+    status: 'in_progress' | 'waiting_approval' | 'completed' | 'interrupted',
+    tokenUsageText?: string
+  ) => void;
   onRpcLog: (entry: JsonRpcLogEntry) => void;
 }
 
+/**
+ * Execute a real turn against the local machine's `codex` CLI (`POST /api/codex/turn-stream`)
+ * and stream live JSONL events (`reasoning`, `command_execution`, `file_change`, `agent_message`, `git.state`).
+ */
 export function runInteractiveAgentTurn(params: {
   threadId: string;
+  cliSessionId?: string | null;
   turnId: string;
   prompt: string;
   attachedFiles: string[];
@@ -326,19 +337,13 @@ export function runInteractiveAgentTurn(params: {
   reasoningEffort: ReasoningEffort;
   subagent: string;
   worktreeBranch: string;
+  cwd?: string;
+  mode?: ComposerMode;
   sandboxPolicy: SandboxPolicy;
   callbacks: StreamTurnCallbacks;
 }): { interrupt: () => void } {
-  let cancelled = false;
-  const timers: Array<ReturnType<typeof setTimeout>> = [];
-
-  const schedule = (ms: number, fn: () => void) => {
-    const t = setTimeout(() => {
-      if (!cancelled) fn();
-    }, ms);
-    timers.push(t);
-  };
-
+  const abortController = new AbortController();
+  const startedAtMs = Date.now();
   const nowTime = () => new Date().toTimeString().split(' ')[0];
 
   const logNotification = (method: string, payload: unknown) => {
@@ -351,232 +356,254 @@ export function runInteractiveAgentTurn(params: {
     });
   };
 
-  const reasoningId = `item_reason_${Date.now()}`;
-  const subagentId = `item_sub_${Date.now()}`;
-  const cmdId = `item_cmd_${Date.now()}`;
-  const fileChangeId = `item_diff_${Date.now()}`;
-  const approvalId = `item_appr_${Date.now()}`;
-  const msgId = `item_msg_${Date.now()}`;
+  // Start a live reasoning indicator right away while local `codex` boots up
+  const liveReasoningId = `item_live_reason_${Date.now()}`;
+  let liveReasoningAdded = false;
 
-  const needsApproval =
-    params.sandboxPolicy.approvalPolicy === 'always-ask' ||
-    (params.sandboxPolicy.approvalPolicy === 'on-risk' &&
-      /deploy|install|curl|fetch|network|port|ws:\/\/|http|rm |docker/i.test(params.prompt));
-
-  schedule(180, () => {
-    const item: TurnItem = {
-      id: reasoningId,
-      type: 'reasoning',
-      status: 'streaming',
-      timestamp: nowTime(),
-      durationSeconds: 1,
-      reasoningSteps: [
-        `Parsing task intent with ${params.model} (effort: ${params.reasoningEffort}, worktree: ${params.worktreeBranch})...`,
-      ],
-    };
-    params.callbacks.onItemAdded(item);
-    logNotification('item/started', { threadId: params.threadId, turnId: params.turnId, item });
-  });
-
-  schedule(750, () => {
-    params.callbacks.onItemUpdated(reasoningId, (prev) => ({
-      ...prev,
-      durationSeconds: 3,
-      reasoningSteps: [
-        ...(prev.reasoningSteps || []),
-        params.invokedSkills.length > 0
-          ? `Loaded skill bundle $${params.invokedSkills.join(', $')} and mapped target files.`
-          : `Inspected workspace boundaries and AGENTS.md rules for branch ${params.worktreeBranch}.`,
-      ],
-    }));
-  });
-
-  schedule(1350, () => {
-    params.callbacks.onItemUpdated(reasoningId, (prev) => ({
-      ...prev,
-      status: 'completed',
-      durationSeconds: 4,
-      reasoningSteps: [
-        ...(prev.reasoningSteps || []),
-        `Formulated execution plan and delegated reconnaissance to \`${params.subagent === 'default' ? 'explorer' : params.subagent}\` subagent.`,
-      ],
-    }));
-    logNotification('item/completed', { itemId: reasoningId });
-
-    const subItem: TurnItem = {
-      id: subagentId,
-      type: 'subagentRun',
-      status: 'completed',
-      timestamp: nowTime(),
-      subagentName: params.subagent === 'default' ? 'explorer' : params.subagent,
-      subagentTask: `Analyze AST & dependencies for "${params.prompt.slice(0, 56)}${params.prompt.length > 56 ? '...' : ''}"`,
-      subagentTokens: '4.8k tokens',
-    };
-    params.callbacks.onItemAdded(subItem);
-    logNotification('item/completed', { item: subItem });
-  });
-
-  if (needsApproval) {
-    schedule(1900, () => {
-      const apprItem: TurnItem = {
-        id: approvalId,
-        type: 'approvalRequest',
-        status: 'waiting_approval',
-        timestamp: nowTime(),
-        approvalId: `appr_${Date.now()}`,
-        approvalCommand: params.invokedSkills.includes('cloud-deploy')
-          ? 'npx wrangler pages deploy dist --project-name codex-desktop'
-          : 'npm run build && node server/app-server.mjs --listen ws://127.0.0.1:4500',
-        approvalReason:
-          'Command requests network/socket access or external deployment under `workspace-write` sandbox policy.',
-        riskLevel: 'medium',
-        sandboxRuleTriggered: `sandbox.mode = "${params.sandboxPolicy.mode}", approval_policy = "${params.sandboxPolicy.approvalPolicy}"`,
-      };
-      params.callbacks.onItemAdded(apprItem);
-      params.callbacks.onTurnStatusChange('waiting_approval');
-      params.callbacks.onRpcLog({
-        id: `rpc_${Date.now()}`,
-        timestamp: nowTime() + '.000',
-        direction: 'server-request',
-        method: 'approval/request',
-        payload: {
-          id: ++rpcRequestId,
-          method: 'approval/request',
-          params: {
-            threadId: params.threadId,
-            turnId: params.turnId,
-            itemId: approvalId,
-            command: apprItem.approvalCommand,
-          },
-        },
+  (async () => {
+    try {
+      const response = await fetchWithFallback('/api/codex/turn-stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          threadId: params.threadId,
+          cliSessionId: params.cliSessionId,
+          turnId: params.turnId,
+          prompt: params.prompt,
+          attachedFiles: params.attachedFiles,
+          invokedSkills: params.invokedSkills,
+          model: params.model,
+          reasoningEffort: params.reasoningEffort,
+          sandboxMode: params.sandboxPolicy.mode,
+          cwd: params.cwd,
+          mode: params.mode || 'agent',
+        }),
+        signal: abortController.signal,
       });
-    });
 
-    return {
-      interrupt: () => {
-        cancelled = true;
-        timers.forEach(clearTimeout);
-      },
-    };
-  }
-
-  schedule(1950, () => {
-    const cmdItem: TurnItem = {
-      id: cmdId,
-      type: 'commandExecution',
-      status: 'completed',
-      timestamp: nowTime(),
-      command: 'npx tsc --noEmit && git diff --stat',
-      cwd: '/Users/zhangjinhui/Desktop/codex-test',
-      exitCode: 0,
-      stdout: 'TypeScript check: 0 errors.\n2 files changed, 34 insertions(+), 5 deletions(-)',
-    };
-    params.callbacks.onItemAdded(cmdItem);
-    logNotification('item/completed', { item: cmdItem });
-  });
-
-  schedule(2500, () => {
-    const targetFile = params.attachedFiles[0] || 'src/components/CenterThreadView.tsx';
-    const fcItem: TurnItem = {
-      id: fileChangeId,
-      type: 'fileChange',
-      status: 'completed',
-      timestamp: nowTime(),
-      filePath: targetFile,
-      changeType: 'modified',
-      additions: 28,
-      deletions: 4,
-      summary: `Updated ${targetFile} in worktree (${params.worktreeBranch}) to fulfill request.`,
-    };
-    params.callbacks.onItemAdded(fcItem);
-
-    const generatedDiff: FileDiff = {
-      id: `diff_gen_${Date.now()}`,
-      filePath: targetFile,
-      status: 'modified',
-      additions: 28,
-      deletions: 4,
-      staged: false,
-      language: 'tsx',
-      comments: [],
-      hunks: [
-        {
-          id: `hunk_gen_${Date.now()}`,
-          header: `@@ -42,6 +42,16 @@ // Codex Agent Patch (${params.worktreeBranch})`,
-          staged: false,
-          lines: [
-            {
-              type: 'context',
-              oldLineNumber: 42,
-              newLineNumber: 42,
-              content: '  // Applied by Codex Agent (' + params.model + ')',
-            },
-            { type: 'del', oldLineNumber: 43, content: '  const status = "pending";' },
-            { type: 'add', newLineNumber: 43, content: `  // Task: ${params.prompt.slice(0, 62)}` },
-            { type: 'add', newLineNumber: 44, content: '  const status = "verified_in_worktree";' },
-            { type: 'add', newLineNumber: 45, content: '  const worktreeIsolated = true;' },
-            {
-              type: 'context',
-              oldLineNumber: 44,
-              newLineNumber: 46,
-              content: '  return { status, worktreeIsolated };',
-            },
-          ],
-        },
-      ],
-    };
-    params.callbacks.onDiffGenerated(generatedDiff);
-    logNotification('item/completed', { item: fcItem });
-  });
-
-  const responseText =
-    params.personality === 'pragmatic'
-      ? `Completed in worktree \`${params.worktreeBranch}\` using **${params.model}**.\n\n- **Changes**: Patched \`${params.attachedFiles[0] || 'src/components/CenterThreadView.tsx'}\` (+28 -4) and verified zero TypeScript regressions.\n- **Review**: Inspect the hunk in the **Diff Review** panel on the right to comment, stage, or merge into \`main\`.`
-      : `I've completed that update for you inside the isolated \`${params.worktreeBranch}\` worktree so your main checkout stays completely clean!\n\n- **What changed**: Updated \`${params.attachedFiles[0] || 'src/components/CenterThreadView.tsx'}\` (+28 -4) and ran \`npx tsc --noEmit\` to confirm everything compiles cleanly.\n- **Next step**: Feel free to inspect the live diff in the right-hand **Diff Review** panel, leave inline comments on any line, or test it directly in **Live Preview**.`;
-
-  const chunks = responseText.match(/.{1,24}/g) || [responseText];
-
-  schedule(2950, () => {
-    const startMsg: TurnItem = {
-      id: msgId,
-      type: 'agentMessage',
-      status: 'streaming',
-      timestamp: nowTime(),
-      text: '',
-    };
-    params.callbacks.onItemAdded(startMsg);
-    logNotification('item/started', { itemId: msgId, type: 'agentMessage' });
-  });
-
-  chunks.forEach((chunk, index) => {
-    schedule(3050 + index * 90, () => {
-      params.callbacks.onItemUpdated(msgId, (prev) => ({
-        ...prev,
-        text: (prev.text || '') + chunk,
-      }));
-      if (index % 3 === 0) {
-        logNotification('item/agentMessage/delta', { itemId: msgId, delta: chunk });
+      if (!response.ok || !response.body) {
+        throw new Error(`HTTP ${response.status} from local Codex bridge`);
       }
-    });
-  });
 
-  schedule(3150 + chunks.length * 90, () => {
-    params.callbacks.onItemUpdated(msgId, (prev) => ({
-      ...prev,
-      status: 'completed',
-    }));
-    params.callbacks.onTurnStatusChange('completed');
-    logNotification('turn/completed', {
-      threadId: params.threadId,
-      turnId: params.turnId,
-      status: 'completed',
-    });
-  });
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      const knownItemIds = new Set<string>();
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const rawLine of lines) {
+          const line = rawLine.trim();
+          if (!line) continue;
+
+          let evt: any;
+          try {
+            evt = JSON.parse(line);
+          } catch {
+            continue;
+          }
+
+          logNotification(evt.type || 'codex/event', evt);
+
+          if (evt.type === 'bridge.info') {
+            if (!liveReasoningAdded) {
+              liveReasoningAdded = true;
+              params.callbacks.onItemAdded({
+                id: liveReasoningId,
+                type: 'reasoning',
+                status: 'streaming',
+                timestamp: nowTime(),
+                durationSeconds: 1,
+                reasoningSteps: [evt.message || 'Connected to local Codex CLI'],
+              });
+            }
+            continue;
+          }
+
+          if (evt.type === 'thread.started' && evt.thread_id) {
+            params.callbacks.onCliThreadStarted?.(evt.thread_id);
+            continue;
+          }
+
+          if (evt.type === 'stderr.delta' && evt.text) {
+            const cleaned = String(evt.text).trim();
+            if (cleaned && liveReasoningAdded) {
+              params.callbacks.onItemUpdated(liveReasoningId, (prev) => ({
+                ...prev,
+                durationSeconds: Math.max(1, Math.round((Date.now() - startedAtMs) / 1000)),
+                reasoningSteps: [...(prev.reasoningSteps || []).slice(-8), cleaned],
+              }));
+            }
+            continue;
+          }
+
+          if (
+            evt.type === 'item.started' ||
+            evt.type === 'item.updated' ||
+            evt.type === 'item.completed'
+          ) {
+            const rawItem = evt.item;
+            if (!rawItem) continue;
+            const itemId = rawItem.id || `item_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`;
+
+            if (rawItem.type === 'reasoning') {
+              const text = String(rawItem.text || '').trim();
+              if (liveReasoningAdded) {
+                params.callbacks.onItemUpdated(liveReasoningId, (prev) => ({
+                  ...prev,
+                  status: evt.type === 'item.completed' ? 'completed' : 'streaming',
+                  durationSeconds: Math.max(1, Math.round((Date.now() - startedAtMs) / 1000)),
+                  reasoningSteps: text
+                    ? [...(prev.reasoningSteps || []), text]
+                    : prev.reasoningSteps,
+                }));
+              } else {
+                liveReasoningAdded = true;
+                params.callbacks.onItemAdded({
+                  id: liveReasoningId,
+                  type: 'reasoning',
+                  status: 'completed',
+                  timestamp: nowTime(),
+                  durationSeconds: Math.max(1, Math.round((Date.now() - startedAtMs) / 1000)),
+                  reasoningSteps: [text || 'Completed reasoning step'],
+                });
+              }
+            } else if (rawItem.type === 'command_execution') {
+              const uiItem: TurnItem = {
+                id: itemId,
+                type: 'commandExecution',
+                status:
+                  evt.type === 'item.completed'
+                    ? rawItem.status === 'failed'
+                      ? 'failed'
+                      : 'completed'
+                    : 'streaming',
+                timestamp: nowTime(),
+                command: rawItem.command || 'shell',
+                exitCode: rawItem.exit_code ?? 0,
+                stdout: rawItem.aggregated_output || '',
+              };
+              if (!knownItemIds.has(itemId)) {
+                knownItemIds.add(itemId);
+                params.callbacks.onItemAdded(uiItem);
+              } else {
+                params.callbacks.onItemUpdated(itemId, () => uiItem);
+              }
+            } else if (rawItem.type === 'file_change') {
+              const changes = Array.isArray(rawItem.changes) ? rawItem.changes : [];
+              for (const ch of changes) {
+                const fcId = `${itemId}_${ch.path}`;
+                if (!knownItemIds.has(fcId)) {
+                  knownItemIds.add(fcId);
+                  params.callbacks.onItemAdded({
+                    id: fcId,
+                    type: 'fileChange',
+                    status: 'completed',
+                    timestamp: nowTime(),
+                    filePath: ch.path,
+                    changeType:
+                      ch.kind === 'add'
+                        ? 'added'
+                        : ch.kind === 'delete'
+                        ? 'deleted'
+                        : 'modified',
+                    additions: 1,
+                    deletions: 0,
+                    summary: `${ch.kind || 'updated'} ${ch.path}`,
+                  });
+                }
+              }
+            } else if (rawItem.type === 'agent_message') {
+              if (liveReasoningAdded) {
+                params.callbacks.onItemUpdated(liveReasoningId, (prev) => ({
+                  ...prev,
+                  status: 'completed',
+                  durationSeconds: Math.max(1, Math.round((Date.now() - startedAtMs) / 1000)),
+                }));
+              }
+              const msgItem: TurnItem = {
+                id: itemId,
+                type: 'agentMessage',
+                status: evt.type === 'item.completed' ? 'completed' : 'streaming',
+                timestamp: nowTime(),
+                text: rawItem.text || '',
+              };
+              if (!knownItemIds.has(itemId)) {
+                knownItemIds.add(itemId);
+                params.callbacks.onItemAdded(msgItem);
+              } else {
+                params.callbacks.onItemUpdated(itemId, () => msgItem);
+              }
+            }
+            continue;
+          }
+
+          if (evt.type === 'git.state' && evt.git) {
+            params.callbacks.onGitStateUpdated?.(evt.git);
+            continue;
+          }
+
+          if (evt.type === 'turn.completed') {
+            if (liveReasoningAdded) {
+              params.callbacks.onItemUpdated(liveReasoningId, (prev) => ({
+                ...prev,
+                status: 'completed',
+                durationSeconds: Math.max(1, Math.round((Date.now() - startedAtMs) / 1000)),
+              }));
+            }
+            const totalTokens =
+              (evt.usage?.input_tokens || 0) + (evt.usage?.output_tokens || 0);
+            const usageStr =
+              totalTokens > 0
+                ? `${(totalTokens / 1000).toFixed(1)}k tokens`
+                : undefined;
+            params.callbacks.onTurnStatusChange('completed', usageStr);
+            continue;
+          }
+
+          if (evt.type === 'turn.failed') {
+            params.callbacks.onItemAdded({
+              id: `item_err_${Date.now()}`,
+              type: 'agentMessage',
+              status: 'failed',
+              timestamp: nowTime(),
+              text: `**Codex Turn Error:** ${evt.error?.message || 'Execution failed'}`,
+            });
+            params.callbacks.onTurnStatusChange('completed');
+          }
+        }
+      }
+
+      params.callbacks.onTurnStatusChange('completed');
+    } catch (err: any) {
+      if (err?.name === 'AbortError') {
+        params.callbacks.onTurnStatusChange('interrupted');
+        return;
+      }
+      params.callbacks.onItemAdded({
+        id: `item_err_${Date.now()}`,
+        type: 'agentMessage',
+        status: 'completed',
+        timestamp: nowTime(),
+        text: `Unable to reach local Codex server: ${String(err?.message || err)}`,
+      });
+      params.callbacks.onTurnStatusChange('completed');
+    }
+  })();
 
   return {
     interrupt: () => {
-      cancelled = true;
-      timers.forEach(clearTimeout);
+      abortController.abort();
+      fetchWithFallback('/api/codex/interrupt', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ turnId: params.turnId, threadId: params.threadId }),
+      }).catch(() => {});
     },
   };
 }

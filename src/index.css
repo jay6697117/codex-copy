@@ -2,21 +2,196 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ============================================================================
+   3-Skin One-Click Theme Engine for OpenAI Codex Desktop App
+   Skins:
+     1. codex-dark      — Official OpenAI Codex macOS Dark (Matte Obsidian #0D0D0D)
+     2. macos-light     — Native macOS Daylight Pure (#FFFFFF / #F4F4F6)
+     3. aurora-midnight — Cyber Aurora Deep Slate (#070B14 / Cyan-Indigo Accent)
+   ============================================================================ */
+
+:root,
+[data-skin='codex-dark'] {
+  color-scheme: dark;
+  --bg-app: #0d0d0d;
+  --bg-sidebar: #141414;
+  --bg-header: rgba(13, 13, 13, 0.88);
+  --bg-elevated: #1a1a1c;
+  --bg-card: #161618;
+  --bg-composer: #1e1e21;
+  --bg-code: #111113;
+  --bg-hover: rgba(255, 255, 255, 0.055);
+  --bg-active: rgba(255, 255, 255, 0.095);
+  --border-subtle: rgba(255, 255, 255, 0.075);
+  --border-strong: rgba(255, 255, 255, 0.15);
+  --text-primary: #ececf1;
+  --text-secondary: #a1a1aa;
+  --text-muted: #6e6e77;
+  --accent-primary: #10a37f;
+  --accent-btn-bg: #ffffff;
+  --accent-btn-text: #0d0d0d;
+  --user-bubble-bg: #26262a;
+  --user-bubble-text: #f4f4f6;
+}
+
+[data-skin='macos-light'] {
+  color-scheme: light;
+  --bg-app: #ffffff;
+  --bg-sidebar: #f3f4f6;
+  --bg-header: rgba(255, 255, 255, 0.9);
+  --bg-elevated: #f9fafb;
+  --bg-card: #f8fafc;
+  --bg-composer: #f3f4f6;
+  --bg-code: #f1f5f9;
+  --bg-hover: rgba(15, 23, 42, 0.05);
+  --bg-active: rgba(15, 23, 42, 0.09);
+  --border-subtle: rgba(15, 23, 42, 0.085);
+  --border-strong: rgba(15, 23, 42, 0.18);
+  --text-primary: #111827;
+  --text-secondary: #4b5563;
+  --text-muted: #6b7280;
+  --accent-primary: #0d9488;
+  --accent-btn-bg: #111827;
+  --accent-btn-text: #ffffff;
+  --user-bubble-bg: #e5e7eb;
+  --user-bubble-text: #111827;
+}
+
+[data-skin='aurora-midnight'] {
+  color-scheme: dark;
+  --bg-app: #070b14;
+  --bg-sidebar: #050811;
+  --bg-header: rgba(7, 11, 20, 0.88);
+  --bg-elevated: #0e1525;
+  --bg-card: #0c1220;
+  --bg-composer: #10182b;
+  --bg-code: #060912;
+  --bg-hover: rgba(56, 189, 248, 0.08);
+  --bg-active: rgba(56, 189, 248, 0.14);
+  --border-subtle: rgba(148, 163, 184, 0.12);
+  --border-strong: rgba(56, 189, 248, 0.32);
+  --text-primary: #f1f5f9;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  --accent-primary: #38bdf8;
+  --accent-btn-bg: #38bdf8;
+  --accent-btn-text: #041019;
+  --user-bubble-bg: #16223b;
+  --user-bubble-text: #f0f9ff;
+}
+
 @layer base {
-  :root {
-    color-scheme: dark;
-  }
-
   body {
-    background-color: #090A0F;
-    color: #ECECF1;
-    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+    background-color: var(--bg-app);
+    color: var(--text-primary);
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Inter', system-ui, sans-serif;
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
     user-select: none;
+    -webkit-font-smoothing: antialiased;
+    transition: background-color 0.18s ease, color 0.18s ease;
   }
 
-  code, pre, textarea, input {
+  code,
+  pre,
+  textarea,
+  input {
     user-select: text;
+    font-family: 'SF Mono', 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+      monospace;
   }
+}
+
+/* Theme utility classes */
+.codex-app-bg {
+  background-color: var(--bg-app);
+  color: var(--text-primary);
+}
+
+.codex-sidebar-bg {
+  background-color: var(--bg-sidebar);
+  border-color: var(--border-subtle);
+}
+
+.codex-header-bg {
+  background-color: var(--bg-header);
+  border-color: var(--border-subtle);
+}
+
+.codex-elevated {
+  background-color: var(--bg-elevated);
+  border-color: var(--border-subtle);
+}
+
+.codex-card {
+  background-color: var(--bg-card);
+  border-color: var(--border-subtle);
+}
+
+.codex-composer {
+  background-color: var(--bg-composer);
+  border-color: var(--border-strong);
+}
+
+.codex-hover:hover {
+  background-color: var(--bg-hover);
+}
+
+.codex-active {
+  background-color: var(--bg-active);
+}
+
+.codex-border {
+  border-color: var(--border-subtle);
+}
+
+.codex-text-primary {
+  color: var(--text-primary);
+}
+
+.codex-text-secondary {
+  color: var(--text-secondary);
+}
+
+.codex-text-muted {
+  color: var(--text-muted);
+}
+
+/* Light mode automatic contrast adjustments for legacy dark utility classes inside subviews */
+[data-skin='macos-light'] .bg-\[\#090A0F\],
+[data-skin='macos-light'] .bg-\[\#0B0D14\],
+[data-skin='macos-light'] .bg-\[\#0A0C12\],
+[data-skin='macos-light'] .bg-\[\#080A0E\],
+[data-skin='macos-light'] .bg-\[\#080A0F\] {
+  background-color: #ffffff !important;
+  color: #111827 !important;
+}
+
+[data-skin='macos-light'] .bg-\[\#111520\],
+[data-skin='macos-light'] .bg-\[\#10131C\],
+[data-skin='macos-light'] .bg-\[\#121622\],
+[data-skin='macos-light'] .bg-\[\#141824\],
+[data-skin='macos-light'] .bg-\[\#0E1017\],
+[data-skin='macos-light'] .bg-\[\#0B0D13\],
+[data-skin='macos-light'] .bg-\[\#090B10\] {
+  background-color: #f3f4f6 !important;
+  color: #1f2937 !important;
+}
+
+[data-skin='macos-light'] .border-\[\#222736\],
+[data-skin='macos-light'] .border-\[\#242B3D\],
+[data-skin='macos-light'] .border-\[\#262E42\] {
+  border-color: #e5e7eb !important;
+}
+
+[data-skin='macos-light'] .text-white,
+[data-skin='macos-light'] .text-slate-100,
+[data-skin='macos-light'] .text-slate-200 {
+  color: #111827 !important;
+}
+
+[data-skin='macos-light'] .text-slate-300,
+[data-skin='macos-light'] .text-slate-400 {
+  color: #4b5563 !important;
 }
 
 /* Custom subtle scrollbars for desktop feel */
@@ -30,12 +205,12 @@
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(148, 163, 184, 0.18);
+  background: rgba(148, 163, 184, 0.22);
   border-radius: 9999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(148, 163, 184, 0.35);
+  background: rgba(148, 163, 184, 0.4);
 }
 
 .app-drag-region {
