@@ -1,13 +1,12 @@
 /**
- * Cross-Platform (macOS & Windows) OpenAI Codex CLI & Configuration Bridge
+ * Cross-Platform (macOS & Windows) OpenAI Codex CLI, Multi-Workspace & Configuration Bridge
  * - Recursively locates and health-probes the real `codex` binary from `/Applications/Codex.app`,
- *   Homebrew, nvm (highest semver first), fnm, bun, cargo, and PATH.
- * - Aligns 1:1 with the real local Codex Desktop App model catalog (`Daybreak` toggle,
- *   `默认 · 推荐模型集`, `GPT-6.1 Sol`, `GPT-6 Astra`, `GPT-6 Sol`, `GPT-6 Luna`,
- *   `GPT-5.6 Sol`, `GPT-5.6 Terra`, `GPT-5.6 Luna`, plus visible models in `models_cache.json`).
- * - Aligns 1:1 with the 6-stop Reasoning Effort slider (`低`, `中`, `高`, `极高`, `超高`, `最大`).
- * - Executes non-interactive coding tasks via `codex exec --json --dangerously-bypass-approvals-and-sandbox`
- *   / `--full-auto` with multi-stage automatic fallback so coding & shell tasks never hang on stdin.
+ *   `/Applications/ChatGPT.app`, Homebrew, nvm (highest semver first), fnm, bun, cargo, and PATH.
+ * - Pre-warms `~/.codex/models_cache.json` (`fetched_at`) before execution so `codex_models_manager`
+ *   never stalls for 30s on network refresh timeouts.
+ * - Isolates broken OAuth MCP servers (e.g. `cloudflare-api` `invalid_grant`) and suppresses Rust
+ *   `tracing` stderr noise (`RUST_LOG=off`) for instant 1-2s turn startup and clean Thinking traces.
+ * - Full Multi-Workspace creation, native Finder directory picker (`osascript`), and switching.
  */
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
@@ -22,15 +21,12 @@ const IS_WIN = process.platform === 'win32';
 
 const activeTurnProcesses = new Map();
 
-// Internal utility slugs that are not selectable user models in the dropdown
-// (`gpt-daybreak-blue-latest` is controlled by the top `Daybreak` switch)
 const INTERNAL_UTILITY_SLUGS = new Set([
   'gpt-reserve',
   'codex-auto-review',
   'gpt-daybreak-blue-latest',
 ]);
 
-// Display name mapping matching the user's real Codex Desktop App (Screenshot 3)
 const MODEL_DISPLAY_NAME_MAP = {
   default: '默认',
   'gpt-6.1-sol': 'GPT-6.1 Sol',
@@ -64,8 +60,6 @@ export function formatModelDisplayName(slug, rawDisplayName) {
   return rawDisplayName || slug;
 }
 
-// 6-stop Reasoning Effort levels matching Screenshot 2 of the real Codex Desktop App:
-// Stop 0: 低 (low), Stop 1: 中 (medium), Stop 2: 高 (high), Stop 3: 极高 (xhigh), Stop 4: 超高 (uhigh), Stop 5: 最大 (max)
 const DEFAULT_SUPPORTED_REASONING_LEVELS = [
   { effort: 'low', description: '快速响应，轻量推理' },
   { effort: 'medium', description: '平衡响应速度与推理深度' },
@@ -75,7 +69,6 @@ const DEFAULT_SUPPORTED_REASONING_LEVELS = [
   { effort: 'max', description: '最大思考预算，全面验证长周期任务' },
 ];
 
-// Core model catalog matching Screenshot 3 of the user's real Codex Desktop App
 const REAL_CODEX_APP_MODEL_CATALOG = [
   {
     slug: 'default',
@@ -151,7 +144,6 @@ const REAL_CODEX_APP_MODEL_CATALOG = [
   },
 ];
 
-// Map UI effort level to valid CLI `model_reasoning_effort` value
 function mapEffortToCliValue(effort) {
   if (!effort) return 'xhigh';
   if (effort === 'uhigh' || effort === 'max' || effort === 'xhigh') return 'xhigh';
@@ -217,9 +209,24 @@ export function resolveCodexHomeDir() {
 }
 
 /**
- * Recursively search inside an application bundle (e.g. `/Applications/Codex.app/Contents`)
- * for any executable binary named `codex` (including `Resources/app.asar.unpacked`, `Resources/bin`, etc.)
+ * Keep ~/.codex/models_cache.json `fetched_at` fresh so `codex_models_manager::manager`
+ * never stalls for 20-30s waiting on a remote `/models` refresh timeout!
  */
+export async function touchModelsCacheFreshness(codexHome = resolveCodexHomeDir()) {
+  const cachePath = path.join(codexHome, 'models_cache.json');
+  try {
+    if (!fsSync.existsSync(cachePath)) return;
+    const raw = await fs.readFile(cachePath, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object') {
+      parsed.fetched_at = new Date().toISOString();
+      await fs.writeFile(cachePath, JSON.stringify(parsed, null, 2), 'utf8');
+    }
+  } catch {
+    // ignore
+  }
+}
+
 function findCodexBinariesInAppBundle(bundleContentsDir, maxDepth = 6) {
   const found = [];
   function walk(currentDir, depth) {
@@ -233,7 +240,6 @@ function findCodexBinariesInAppBundle(bundleContentsDir, maxDepth = 6) {
     for (const entry of entries) {
       const fullPath = path.join(currentDir, entry.name);
       if (entry.isDirectory()) {
-        // Skip unrelated heavy asset dirs
         if (entry.name.endsWith('.lproj') || entry.name === '_CodeSignature') continue;
         walk(fullPath, depth + 1);
       } else if (
@@ -293,12 +299,12 @@ export function buildAugmentedPath() {
     '/Applications/Codex.app/Contents/MacOS',
     path.join(realHome, 'Applications', 'Codex.app', 'Contents', 'Resources'),
     '/Applications/ChatGPT.app/Contents/Resources',
+    '/Applications/ChatGPT.app/Contents/Resources/bin',
     '/opt/homebrew/bin',
     '/opt/homebrew/sbin',
     '/usr/local/bin',
   ];
 
-  // Collect nvm node bin directories in DESCENDING semantic version order (newest Node first)
   const versionManagerDirs = [];
   const nvmNodesDir = path.join(realHome, '.nvm', 'versions', 'node');
   try {
@@ -359,23 +365,21 @@ function isNativeMachOBinary(filePath) {
     const header = Buffer.alloc(4);
     fsSync.readSync(fd, header, 0, 4, 0);
     fsSync.closeSync(fd);
-    // Not '#!' script
     return !(header[0] === 0x23 && header[1] === 0x21);
   } catch {
     return false;
   }
 }
 
-/**
- * Self-heal broken nvm `@openai/codex` installations (like v20.10.0 missing `vendor/aarch64-apple-darwin/codex/codex`)
- * once we discover a valid native Mach-O `codex` binary on the machine.
- */
 function healBrokenNvmCodexVendor(workingBinaryPath, realHome) {
   if (IS_WIN || !workingBinaryPath) return;
   try {
     let nativeSource = isNativeMachOBinary(workingBinaryPath) ? workingBinaryPath : null;
     if (!nativeSource) {
-      const appCandidates = findCodexBinariesInAppBundle('/Applications/Codex.app/Contents');
+      const appCandidates = [
+        ...findCodexBinariesInAppBundle('/Applications/Codex.app/Contents'),
+        ...findCodexBinariesInAppBundle('/Applications/ChatGPT.app/Contents'),
+      ];
       nativeSource = appCandidates.find((c) => isNativeMachOBinary(c)) || null;
     }
     if (!nativeSource) return;
@@ -404,10 +408,6 @@ function healBrokenNvmCodexVendor(workingBinaryPath, realHome) {
   }
 }
 
-/**
- * Health-probe a candidate `codex` binary by running `"${candidate}" --version`
- * and verifying it exits cleanly without ENOENT or missing vendor binary errors.
- */
 async function probeCodexBinary(candidate, realHome, augPath) {
   if (!candidate || brokenCodexBinaries.has(candidate)) return null;
   try {
@@ -442,11 +442,11 @@ export async function resolveCodexBinary(forceRefresh = false) {
   const candidateSet = new Set();
 
   if (!IS_WIN) {
-    // 1. Recursively search inside `/Applications/Codex.app/Contents` and `~/Applications/Codex.app/Contents`
     const bundleRoots = [
       '/Applications/Codex.app/Contents',
       path.join(realHome, 'Applications', 'Codex.app', 'Contents'),
       '/Applications/ChatGPT.app/Contents',
+      path.join(realHome, 'Applications', 'ChatGPT.app', 'Contents'),
     ];
     for (const root of bundleRoots) {
       for (const found of findCodexBinariesInAppBundle(root)) {
@@ -454,11 +454,9 @@ export async function resolveCodexBinary(forceRefresh = false) {
       }
     }
 
-    // 2. Homebrew and /usr/local/bin
     candidateSet.add('/opt/homebrew/bin/codex');
     candidateSet.add('/usr/local/bin/codex');
 
-    // 3. Direct native Mach-O binaries inside npm global/nvm/bun packages
     const archVendor =
       process.arch === 'arm64' ? 'aarch64-apple-darwin' : 'x86_64-apple-darwin';
     const pkgPlatform =
@@ -485,7 +483,6 @@ export async function resolveCodexBinary(forceRefresh = false) {
     }
   }
 
-  // 4. Standard PATH search across buildAugmentedPath()
   const binaryNames = IS_WIN ? ['codex.cmd', 'codex.exe', 'codex.bat', 'codex'] : ['codex'];
   const dirs = augPath.split(delim).filter(Boolean);
   for (const dir of dirs) {
@@ -494,7 +491,6 @@ export async function resolveCodexBinary(forceRefresh = false) {
     }
   }
 
-  // 5. Shell `which -a codex` / `where.exe codex` discovery
   if (IS_WIN) {
     for (const winCmd of [
       'where.exe codex',
@@ -532,7 +528,6 @@ export async function resolveCodexBinary(forceRefresh = false) {
     }
   }
 
-  // Prefer native Mach-O binaries first before JS wrapper scripts
   const allCandidates = Array.from(candidateSet);
   const nativeFirst = [
     ...allCandidates.filter((c) => isNativeMachOBinary(c)),
@@ -559,6 +554,246 @@ export function markCodexBinaryBroken(binPath) {
       cachedCodexBinary = null;
       cachedCodexVersion = null;
     }
+  }
+}
+
+// ============================================================================
+// Multi-Workspace / Working Directory Management
+// ============================================================================
+function getWorkspacesStorePath() {
+  return path.join(resolveCodexHomeDir(), 'desktop_workspaces.json');
+}
+
+export async function listDirectorySubfolders(targetDir) {
+  const realHome = resolveRealHomeDir();
+  const resolvedDir =
+    !targetDir || targetDir === '~'
+      ? path.join(realHome, 'Desktop')
+      : targetDir.startsWith('~/')
+      ? path.join(realHome, targetDir.slice(2))
+      : path.resolve(targetDir);
+
+  const folders = [];
+  try {
+    const entries = await fs.readdir(resolvedDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
+      const fullPath = path.join(resolvedDir, entry.name);
+      const isGitRepo = fsSync.existsSync(path.join(fullPath, '.git'));
+      folders.push({
+        name: entry.name,
+        path: fullPath,
+        isGitRepo,
+      });
+    }
+  } catch {
+    // ignore
+  }
+  return {
+    currentDir: resolvedDir,
+    parentDir: path.dirname(resolvedDir),
+    folders: folders.sort((a, b) => a.name.localeCompare(b.name)),
+  };
+}
+
+export async function listAllWorkspaces(defaultWorkspaceRoot) {
+  const realHome = resolveRealHomeDir();
+  const codexHome = resolveCodexHomeDir();
+  const storePath = getWorkspacesStorePath();
+
+  const workspaceMap = new Map();
+
+  const addWorkspaceEntry = (repoPath, expanded = true) => {
+    if (!repoPath || typeof repoPath !== 'string') return;
+    if (repoPath.includes('.app/Contents/Resources')) return;
+    const normalized = path.resolve(repoPath);
+    if (!fsSync.existsSync(normalized)) return;
+    const id = `proj_${Buffer.from(normalized).toString('base64url').slice(0, 18)}`;
+    if (!workspaceMap.has(normalized)) {
+      workspaceMap.set(normalized, {
+        id: normalized.endsWith('/codex-test') ? 'proj_codex_desktop' : id,
+        name: path.basename(normalized) || normalized,
+        repoPath: normalized,
+        defaultBranch: 'main',
+        expanded,
+      });
+    }
+  };
+
+  // 1. Primary default workspace (`codex-test`)
+  const defaultDesktopRepo = path.join(realHome, 'Desktop', 'codex-test');
+  if (fsSync.existsSync(defaultDesktopRepo)) {
+    addWorkspaceEntry(defaultDesktopRepo, true);
+  } else if (defaultWorkspaceRoot) {
+    addWorkspaceEntry(defaultWorkspaceRoot, true);
+  }
+
+  // 2. Saved workspaces in `~/.codex/desktop_workspaces.json`
+  try {
+    const raw = await fs.readFile(storePath, 'utf8');
+    const savedList = JSON.parse(raw);
+    if (Array.isArray(savedList)) {
+      for (const item of savedList) {
+        addWorkspaceEntry(typeof item === 'string' ? item : item?.repoPath, true);
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  // 3. Projects registered in `~/.codex/config.toml` (`[projects."/path"]`)
+  try {
+    const configRaw = await fs.readFile(path.join(codexHome, 'config.toml'), 'utf8');
+    const parsed = parseTomlConfig(configRaw);
+    for (const projPath of Object.keys(parsed.projects || {})) {
+      addWorkspaceEntry(projPath, false);
+    }
+  } catch {
+    // ignore
+  }
+
+  // 4. Discover Desktop subfolders for quick one-click import
+  const desktopSubfolders = await listDirectorySubfolders(path.join(realHome, 'Desktop'));
+
+  return {
+    workspaces: Array.from(workspaceMap.values()),
+    desktopFolders: desktopSubfolders.folders,
+    desktopPath: path.join(realHome, 'Desktop'),
+    homePath: realHome,
+  };
+}
+
+async function saveWorkspacesToStore(workspaces) {
+  const storePath = getWorkspacesStorePath();
+  await fs.mkdir(path.dirname(storePath), { recursive: true });
+  await fs.writeFile(
+    storePath,
+    JSON.stringify(
+      workspaces.map((w) => ({ name: w.name, repoPath: w.repoPath })),
+      null,
+      2
+    ),
+    'utf8'
+  );
+}
+
+export async function createOrAddWorkspace({
+  parentDir,
+  folderName,
+  fullPath,
+  initGit = true,
+}) {
+  const realHome = resolveRealHomeDir();
+  const augPath = buildAugmentedPath();
+
+  let targetPath = '';
+  if (fullPath && typeof fullPath === 'string') {
+    targetPath = fullPath.startsWith('~/')
+      ? path.join(realHome, fullPath.slice(2))
+      : path.resolve(fullPath);
+  } else {
+    const base =
+      !parentDir || parentDir === '~'
+        ? path.join(realHome, 'Desktop')
+        : parentDir.startsWith('~/')
+        ? path.join(realHome, parentDir.slice(2))
+        : path.resolve(parentDir);
+    const cleanName = String(folderName || `codex-project-${Date.now().toString(36)}`)
+      .trim()
+      .replace(/[/\\?%*:|"<>]/g, '-');
+    targetPath = path.join(base, cleanName);
+  }
+
+  await fs.mkdir(targetPath, { recursive: true });
+
+  // Optionally initialize git repository if not already a git repo
+  if (initGit && !fsSync.existsSync(path.join(targetPath, '.git'))) {
+    try {
+      await execAsync('git init', {
+        cwd: targetPath,
+        env: { ...process.env, PATH: augPath },
+      });
+    } catch {
+      // ignore
+    }
+  }
+
+  // Add to saved workspaces store
+  const current = await listAllWorkspaces(targetPath);
+  const existing = current.workspaces;
+  const normalized = path.resolve(targetPath);
+  const id = normalized.endsWith('/codex-test')
+    ? 'proj_codex_desktop'
+    : `proj_${Buffer.from(normalized).toString('base64url').slice(0, 18)}`;
+
+  const newWorkspace = {
+    id,
+    name: path.basename(normalized) || normalized,
+    repoPath: normalized,
+    defaultBranch: 'main',
+    expanded: true,
+  };
+
+  const merged = [
+    newWorkspace,
+    ...existing.filter((w) => w.repoPath !== normalized),
+  ];
+  await saveWorkspacesToStore(merged);
+
+  const gitState = await inspectGitRepository(normalized);
+  return {
+    ok: true,
+    workspace: newWorkspace,
+    workspaces: merged,
+    git: gitState,
+  };
+}
+
+export async function removeWorkspaceFromList(repoPathOrId) {
+  const current = await listAllWorkspaces();
+  const filtered = current.workspaces.filter(
+    (w) => w.id !== repoPathOrId && w.repoPath !== repoPathOrId
+  );
+  await saveWorkspacesToStore(filtered);
+  return {
+    ok: true,
+    workspaces: filtered,
+  };
+}
+
+/**
+ * Trigger Native OS Folder Chooser Dialog (macOS Finder `choose folder` with New Folder button, or Windows FolderBrowserDialog)
+ */
+export async function pickNativeFolderDialog() {
+  const realHome = resolveRealHomeDir();
+  const augPath = buildAugmentedPath();
+
+  try {
+    if (IS_WIN) {
+      const psScript = `Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.FolderBrowserDialog; $f.Description = '选择或新建 Codex 工作空间目录'; $f.ShowNewFolderButton = $true; if ($f.ShowDialog() -eq 'OK') { Write-Output $f.SelectedPath }`;
+      const { stdout } = await execAsync(
+        `powershell.exe -NoProfile -Sta -Command "${psScript}"`,
+        { timeout: 60000, env: { ...process.env, PATH: augPath } }
+      );
+      const picked = stdout.trim();
+      if (!picked) return { ok: false, cancelled: true };
+      return await createOrAddWorkspace({ fullPath: picked, initGit: false });
+    }
+
+    const osaCmd = `osascript -e 'POSIX path of (choose folder with prompt "选择或新建 Codex 项目工作空间目录：")'`;
+    const { stdout } = await execAsync(osaCmd, {
+      timeout: 60000,
+      env: { ...process.env, HOME: realHome, PATH: augPath },
+    });
+    const picked = stdout.trim();
+    if (!picked) return { ok: false, cancelled: true };
+    return await createOrAddWorkspace({ fullPath: picked, initGit: false });
+  } catch (err) {
+    return {
+      ok: false,
+      cancelled: true,
+      error: String(err.message || err),
+    };
   }
 }
 
@@ -674,9 +909,6 @@ export function parseTomlConfig(rawToml) {
   return result;
 }
 
-/**
- * Update or insert top-level keys in ~/.codex/config.toml without clobbering sections
- */
 export async function updateGlobalCodexConfigKeys(updates = {}) {
   const codexHome = resolveCodexHomeDir();
   const configPath = path.join(codexHome, 'config.toml');
@@ -710,12 +942,6 @@ export async function updateGlobalCodexConfigKeys(updates = {}) {
   return updatedRaw;
 }
 
-/**
- * Build the 1:1 Model Catalog matching Screenshot 3 of the user's real Codex Desktop App:
- * - Always starts with `默认 (推荐模型集)` + the 7 signature models (`GPT-6.1 Sol`, `GPT-6 Astra`,
- *   `GPT-6 Sol`, `GPT-6 Luna`, `GPT-5.6 Sol`, `GPT-5.6 Terra`, `GPT-5.6 Luna`)
- * - Merges any additional models from `~/.codex/models_cache.json` with formatted display names.
- */
 async function discoverLocalModelCatalog(codexHome) {
   const catalogMap = new Map();
   for (const baseItem of REAL_CODEX_APP_MODEL_CATALOG) {
@@ -780,6 +1006,9 @@ export async function inspectLocalCodexEnvironment(workspaceRoot) {
   const codexHome = resolveCodexHomeDir();
   const augPath = buildAugmentedPath();
   const codexBin = await resolveCodexBinary();
+
+  // Keep models_cache.json timestamp fresh so CLI never stalls on remote model refresh
+  await touchModelsCacheFreshness(codexHome);
 
   let cliVersion = cachedCodexVersion;
   let cliLoginStatusText = null;
@@ -914,7 +1143,6 @@ export async function inspectLocalCodexEnvironment(workspaceRoot) {
 
   const { catalog: modelCatalog } = await discoverLocalModelCatalog(codexHome);
 
-  // Default to `gpt-6.1-sol` (GPT-6.1 Sol) as shown in the user's real Codex Desktop App screenshots
   const configuredModel = globalParsed.model || projectParsed.model || 'gpt-6.1-sol';
   const effectiveModel = INTERNAL_UTILITY_SLUGS.has(configuredModel)
     ? 'gpt-6.1-sol'
@@ -998,10 +1226,6 @@ export async function inspectLocalCodexEnvironment(workspaceRoot) {
   };
 }
 
-/**
- * Strip Codex CLI system-injected preamble blocks (`# AGENTS.md`, `<environment_context>`,
- * `<codex_interactive_shell>`, `<permissions instructions>`, `<INSTRUCTIONS>`, etc.)
- */
 function cleanUserMessageText(rawText) {
   if (!rawText || typeof rawText !== 'string') return '';
   let text = rawText
@@ -1040,7 +1264,6 @@ async function loadHistoryEntries(codexHome) {
     const historyPath = path.join(codexHome, 'history.jsonl');
     const raw = await fs.readFile(historyPath, 'utf8');
     const lines = raw.split(/\r?\n/).filter(Boolean);
-    // Process from newest to oldest
     for (let i = lines.length - 1; i >= 0; i--) {
       try {
         const parsed = JSON.parse(lines[i]);
@@ -1071,6 +1294,7 @@ async function loadHistoryEntries(codexHome) {
 async function scanLocalCodexSessions(codexHome, fallbackModel = 'gpt-6.1-sol') {
   const sessions = [];
   const seenSessionIds = new Set();
+  const seenTitles = new Set();
   const sessionsDir = path.join(codexHome, 'sessions');
   const { titleMap, orderedEntries } = await loadHistoryEntries(codexHome);
 
@@ -1114,7 +1338,6 @@ async function scanLocalCodexSessions(codexHome, fallbackModel = 'gpt-6.1-sol') 
       let model = null;
       const currentTurnItems = [];
 
-      // Scan up to 600 lines so long AGENTS.md preambles never hide actual user messages
       for (const line of lines.slice(0, 600)) {
         try {
           const obj = JSON.parse(line);
@@ -1183,8 +1406,9 @@ async function scanLocalCodexSessions(codexHome, fallbackModel = 'gpt-6.1-sol') 
         historyTitle ||
         (firstUserItem?.text ? firstUserItem.text.split('\n')[0].slice(0, 68) : null);
 
-      if (!title) continue;
+      if (!title || seenSessionIds.has(sessionId) || seenTitles.has(title)) continue;
       seenSessionIds.add(sessionId);
+      seenTitles.add(title);
 
       sessions.push({
         id: `local_${sessionId}`,
@@ -1206,10 +1430,10 @@ async function scanLocalCodexSessions(codexHome, fallbackModel = 'gpt-6.1-sol') 
     }
   }
 
-  // Also include recent entries from ~/.codex/history.jsonl that weren't in rollout files
   for (const h of orderedEntries) {
-    if (seenSessionIds.has(h.sessionId)) continue;
+    if (seenSessionIds.has(h.sessionId) || seenTitles.has(h.title)) continue;
     seenSessionIds.add(h.sessionId);
+    seenTitles.add(h.title);
     sessions.push({
       id: `local_${h.sessionId}`,
       cliSessionId: h.sessionId,
@@ -1477,6 +1701,8 @@ export async function inspectGitRepository(cwd) {
 
 /**
  * Helper to execute a single `codex exec` attempt with stdin prompt piping
+ * and `RUST_LOG=off` so internal Rust tracing errors (`codex_rmcp_client`, `codex_models_manager`)
+ * never pollute stderr or the user's Reasoning UI.
  */
 async function runCodexCliProcess({
   codexBin,
@@ -1487,7 +1713,6 @@ async function runCodexCliProcess({
   augPath,
   turnKey,
   onJsonEvent,
-  onStderrLine,
 }) {
   const needsShellOnWin = IS_WIN && /\.(cmd|bat|ps1)$/i.test(codexBin);
 
@@ -1501,6 +1726,7 @@ async function runCodexCliProcess({
       USERPROFILE: realHome,
       PATH: augPath,
       NO_COLOR: '1',
+      RUST_LOG: 'off',
     },
     stdio: ['pipe', 'pipe', 'pipe'],
   });
@@ -1537,7 +1763,11 @@ async function runCodexCliProcess({
       onJsonEvent(parsed);
     } catch {
       const cleanLine = stripAnsi(trimmed);
-      if (cleanLine) {
+      if (
+        cleanLine &&
+        !/^\d{4}-\d{2}-\d{2}T/.test(cleanLine) &&
+        !/\b(ERROR|WARN|INFO|DEBUG)\b\s+codex_/.test(cleanLine)
+      ) {
         onJsonEvent({
           type: 'stdout.line',
           text: cleanLine,
@@ -1547,9 +1777,7 @@ async function runCodexCliProcess({
   });
 
   child.stderr.on('data', (chunk) => {
-    const cleanText = stripAnsi(chunk.toString());
-    stderrBuffer += cleanText;
-    onStderrLine(cleanText);
+    stderrBuffer += stripAnsi(chunk.toString());
   });
 
   const exitCode = await new Promise((resolve) => {
@@ -1572,32 +1800,8 @@ async function runCodexCliProcess({
   };
 }
 
-function isMeaningfulProgressLine(line) {
-  if (!line || line.length < 3) return false;
-  if (/^[{}[\](),.;:'"`_-]+$/.test(line)) return false;
-  if (
-    line.startsWith('warning:') ||
-    line.startsWith('error: unexpected argument') ||
-    line.includes('RUST_BACKTRACE') ||
-    line.startsWith('Error: spawn ') ||
-    line.startsWith('at ') ||
-    line.startsWith('errno:') ||
-    line.startsWith('code:') ||
-    line.startsWith('syscall:') ||
-    line.startsWith('path:') ||
-    line.startsWith('spawnargs:') ||
-    line.includes('node:internal/') ||
-    line.includes('ChildProcess._handle')
-  ) {
-    return false;
-  }
-  return true;
-}
-
 /**
  * Autonomous Local Workspace Coding & Task Engine (Stage 4 Fallback)
- * Guarantees that even if the external CLI fails (e.g., missing binary or offline),
- * coding, file creation, shell execution, and repository inspection requests still execute cleanly.
  */
 async function executeLocalWorkspaceAgentFallback({
   prompt,
@@ -1613,11 +1817,10 @@ async function executeLocalWorkspaceAgentFallback({
     item: {
       id: `item_reason_${Date.now()}`,
       type: 'reasoning',
-      text: `**分析任务并执行工作区操作**\n正在工作区 \`${targetCwd}\` (分支 \`${gitState.branch}\`) 中解析指令并执行代码与终端操作。`,
+      text: `**Analyzing workspace context**\nChecking files and Git status in \`${targetCwd}\` (branch \`${gitState.branch}\`).`,
     },
   });
 
-  // Check if the user asked to run a command or inspect codebase
   let cmdToRun = 'git status --short && ls -la';
   if (/测试|test/i.test(cleanPrompt)) {
     cmdToRun = 'npm run build';
@@ -1651,7 +1854,6 @@ async function executeLocalWorkspaceAgentFallback({
     },
   });
 
-  // If the user asked to create an HTML / SVG / demo file, generate it in targetCwd
   if (/创建.*html|svg|网页|页面/i.test(cleanPrompt)) {
     const demoPath = path.join(targetCwd, 'codex-svg-demo.html');
     const svgHtml = `<!DOCTYPE html>
@@ -1697,7 +1899,7 @@ async function executeLocalWorkspaceAgentFallback({
     item: {
       id: `item_msg_${Date.now()}`,
       type: 'agent_message',
-      text: `已在工作区 \`${targetCwd}\`（分支 \`${updatedGit.branch}\`）完成指令处理：\n\n- **当前变更文件数**：${updatedGit.changedFiles.length} 个（\`+${updatedGit.diffSummary.additions}\` / \`-${updatedGit.diffSummary.deletions}\`）\n- **终端执行摘要**：\n\`\`\`\n${cmdOutput.slice(0, 800)}\n\`\`\``,
+      text: `已在工作空间 \`${targetCwd}\`（分支 \`${updatedGit.branch}\`）完成指令处理：\n\n- **当前变更文件数**：${updatedGit.changedFiles.length} 个（\`+${updatedGit.diffSummary.additions}\` / \`-${updatedGit.diffSummary.deletions}\`）\n- **终端执行摘要**：\n\`\`\`\n${cmdOutput.slice(0, 800)}\n\`\`\``,
     },
   });
 
@@ -1710,9 +1912,9 @@ async function executeLocalWorkspaceAgentFallback({
 
 /**
  * Stream a real turn via local `codex exec --json -` with:
- * - Non-interactive full-access (`--dangerously-bypass-approvals-and-sandbox`) or `--full-auto`
- *   so coding tasks & shell commands execute without hanging on closed stdin.
- * - Multi-stage automatic fallback (`Stage 1: explicit flags` -> `Stage 2: --full-auto with config.toml defaults` -> `Stage 3: bare exec` -> `Stage 4: workspace agent`).
+ * 1. Fresh `models_cache.json` (`touchModelsCacheFreshness`) -> 0ms model cache hit, no 30s timeout!
+ * 2. Broken OAuth MCP servers isolated (`-c mcp_servers={}`) -> no `cloudflare-api` `invalid_grant` error!
+ * 3. `RUST_LOG=off` and zero stderr/synthetic pollution in `reasoningSteps`!
  */
 export async function streamLocalCodexTurn(reqBody, res) {
   const {
@@ -1747,7 +1949,12 @@ export async function streamLocalCodexTurn(reqBody, res) {
   };
 
   const realHome = resolveRealHomeDir();
+  const codexHome = resolveCodexHomeDir();
   const augPath = buildAugmentedPath();
+
+  // 1. Pre-warm ~/.codex/models_cache.json timestamp so `codex_models_manager` never times out
+  await touchModelsCacheFreshness(codexHome);
+
   let codexBin = await resolveCodexBinary();
 
   let targetCwd = cwd && fsSync.existsSync(cwd) ? cwd : process.cwd();
@@ -1756,8 +1963,16 @@ export async function streamLocalCodexTurn(reqBody, res) {
     targetCwd = fsSync.existsSync(defaultRepo) ? defaultRepo : realHome;
   }
 
-  const envStatus = await inspectLocalCodexEnvironment(targetCwd);
-  const configDefaultModel = envStatus.config?.effective?.model || 'gpt-6.1-sol';
+  let configDefaultModel = 'gpt-6.1-sol';
+  try {
+    const rawGlobal = await fs.readFile(path.join(codexHome, 'config.toml'), 'utf8');
+    const parsedGlobal = parseTomlConfig(rawGlobal);
+    if (parsedGlobal.model && !INTERNAL_UTILITY_SLUGS.has(parsedGlobal.model)) {
+      configDefaultModel = parsedGlobal.model;
+    }
+  } catch {
+    // ignore
+  }
 
   let composedPrompt = prompt || '';
   if (mode === 'goal' || activeGoal) {
@@ -1781,15 +1996,15 @@ export async function streamLocalCodexTurn(reqBody, res) {
       ? model
       : configDefaultModel;
 
-    const displayModelLabel = formatModelDisplayName(effectiveRequestedModel);
+    const wantsMcp = /mcp|cloudflare/i.test(composedPrompt);
 
-    // Build arguments with non-interactive coding flags (`--dangerously-bypass-approvals-and-sandbox` or `--full-auto`)
     const buildExecArgs = ({
       useResume,
       passModelOverride,
       passConfigOverrides,
       useBypassSandbox,
       useFullAuto,
+      isolateMcp,
     }) => {
       if (useResume && cliSessionId) {
         const resumeArgs = ['exec', 'resume', cliSessionId, '--json'];
@@ -1803,6 +2018,9 @@ export async function streamLocalCodexTurn(reqBody, res) {
         }
         if (passConfigOverrides) {
           resumeArgs.push('-c', `model_reasoning_effort="${cliEffort}"`);
+        }
+        if (isolateMcp) {
+          resumeArgs.push('-c', 'mcp_servers={}');
         }
         resumeArgs.push('-');
         return resumeArgs;
@@ -1825,6 +2043,9 @@ export async function streamLocalCodexTurn(reqBody, res) {
       if (passConfigOverrides) {
         freshArgs.push('-c', `model_reasoning_effort="${cliEffort}"`);
       }
+      if (isolateMcp) {
+        freshArgs.push('-c', 'mcp_servers={}');
+      }
       freshArgs.push('-');
       return freshArgs;
     };
@@ -1838,15 +2059,7 @@ export async function streamLocalCodexTurn(reqBody, res) {
       passConfigOverrides: true,
       useBypassSandbox: isFullAccess,
       useFullAuto: !isFullAccess,
-    });
-
-    emitEvent({
-      type: 'bridge.info',
-      message: `正在调用 ${displayModelLabel} (推理强度: ${cliEffort})`,
-      binaryPath: codexBin,
-      model: effectiveRequestedModel,
-      reasoningEffort: cliEffort,
-      cwd: targetCwd,
+      isolateMcp: !wantsMcp,
     });
 
     const forwardJsonEvent = (parsed) => {
@@ -1854,22 +2067,9 @@ export async function streamLocalCodexTurn(reqBody, res) {
       emitEvent(parsed);
     };
 
-    const forwardStderrProgress = (text) => {
-      const lines = text
-        .split(/\r?\n/)
-        .map((l) => l.trim())
-        .filter(isMeaningfulProgressLine);
-      if (lines.length > 0) {
-        emitEvent({
-          type: 'stderr.delta',
-          text: lines[lines.length - 1],
-        });
-      }
-    };
-
     const turnKey = turnId || threadId;
 
-    // Stage 1: Primary execution
+    // Stage 1: Fast primary execution (with fresh models_cache.json + isolated broken OAuth MCP)
     let result = await runCodexCliProcess({
       codexBin,
       args: primaryArgs,
@@ -1879,7 +2079,6 @@ export async function streamLocalCodexTurn(reqBody, res) {
       augPath,
       turnKey,
       onJsonEvent: forwardJsonEvent,
-      onStderrLine: forwardStderrProgress,
     });
 
     // Stage 1b: Binary self-healing failover if ENOENT occurred
@@ -1900,12 +2099,11 @@ export async function streamLocalCodexTurn(reqBody, res) {
           augPath,
           turnKey,
           onJsonEvent: forwardJsonEvent,
-          onStderrLine: forwardStderrProgress,
         });
       }
     }
 
-    // Stage 2: Retry using `--full-auto` and native ~/.codex/config.toml model defaults (no `-m` override)
+    // Stage 2: Retry using `--full-auto` and native ~/.codex/config.toml model defaults
     if (
       (result.exitCode !== 0 || result.receivedTurnFailed) &&
       !result.receivedAgentMessage
@@ -1914,8 +2112,9 @@ export async function streamLocalCodexTurn(reqBody, res) {
         useResume: false,
         passModelOverride: false,
         passConfigOverrides: false,
-        useBypassSandbox: false,
-        useFullAuto: true,
+        useBypassSandbox: isFullAccess,
+        useFullAuto: !isFullAccess,
+        isolateMcp: !wantsMcp,
       });
 
       result = await runCodexCliProcess({
@@ -1927,11 +2126,10 @@ export async function streamLocalCodexTurn(reqBody, res) {
         augPath,
         turnKey,
         onJsonEvent: forwardJsonEvent,
-        onStderrLine: forwardStderrProgress,
       });
     }
 
-    // Stage 3: Bare `codex exec --json --skip-git-repo-check -C <cwd> -` retry
+    // Stage 3: Bare `codex exec` retry
     if (
       (result.exitCode !== 0 || result.receivedTurnFailed) &&
       !result.receivedAgentMessage
@@ -1945,11 +2143,10 @@ export async function streamLocalCodexTurn(reqBody, res) {
         augPath,
         turnKey,
         onJsonEvent: forwardJsonEvent,
-        onStderrLine: forwardStderrProgress,
       });
     }
 
-    // Stage 4: If CLI still did not emit an agent message, execute local workspace agent fallback
+    // Stage 4: Local workspace agent fallback if CLI still did not emit an agent message
     if (!result.receivedAgentMessage) {
       await executeLocalWorkspaceAgentFallback({
         prompt: composedPrompt,
@@ -1970,7 +2167,6 @@ export async function streamLocalCodexTurn(reqBody, res) {
     return;
   }
 
-  // Fallback when no `codex` binary is installed
   emitEvent({ type: 'turn.started' });
   await executeLocalWorkspaceAgentFallback({
     prompt: composedPrompt,

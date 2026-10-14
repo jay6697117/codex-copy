@@ -6,6 +6,7 @@ import {
   LocalCodexStatus,
   ModelId,
   PersonalityMode,
+  ProjectWorkspace,
   ReasoningEffort,
   SandboxPolicy,
   TurnItem,
@@ -51,6 +52,111 @@ export async function checkAppServerHealth(): Promise<{
     };
   } catch {
     return { connected: false };
+  }
+}
+
+// ============================================================================
+// Multi-Workspace / Working Directory Client APIs
+// ============================================================================
+export interface SubfolderEntry {
+  name: string;
+  path: string;
+  isGitRepo: boolean;
+}
+
+export async function fetchWorkspaces(): Promise<{
+  workspaces: ProjectWorkspace[];
+  desktopFolders: SubfolderEntry[];
+  desktopPath: string;
+  homePath: string;
+} | null> {
+  try {
+    const res = await fetchWithFallback('/api/workspaces', {
+      signal: AbortSignal.timeout(4000),
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+export async function fetchDirectorySubfolders(dir?: string): Promise<{
+  currentDir: string;
+  parentDir: string;
+  folders: SubfolderEntry[];
+} | null> {
+  try {
+    const query = dir ? `?dir=${encodeURIComponent(dir)}` : '';
+    const res = await fetchWithFallback(`/api/fs/list-dirs${query}`, {
+      signal: AbortSignal.timeout(4000),
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+export async function createWorkspaceDirectory(params: {
+  parentDir?: string;
+  folderName?: string;
+  fullPath?: string;
+  initGit?: boolean;
+}): Promise<{
+  ok: boolean;
+  workspace?: ProjectWorkspace;
+  workspaces?: ProjectWorkspace[];
+  git?: any;
+  tree?: FileTreeNode[];
+  error?: string;
+}> {
+  try {
+    const res = await fetchWithFallback('/api/workspaces/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    });
+    return await res.json();
+  } catch (err) {
+    return { ok: false, error: String(err) };
+  }
+}
+
+export async function pickNativeWorkspaceFolder(): Promise<{
+  ok: boolean;
+  cancelled?: boolean;
+  workspace?: ProjectWorkspace;
+  workspaces?: ProjectWorkspace[];
+  git?: any;
+  tree?: FileTreeNode[];
+  error?: string;
+}> {
+  try {
+    const res = await fetchWithFallback('/api/workspaces/pick-folder', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    return await res.json();
+  } catch (err) {
+    return { ok: false, error: String(err) };
+  }
+}
+
+export async function removeWorkspaceDirectory(idOrPath: string): Promise<{
+  ok: boolean;
+  workspaces?: ProjectWorkspace[];
+}> {
+  try {
+    const res = await fetchWithFallback('/api/workspaces/remove', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: idOrPath, repoPath: idOrPath }),
+    });
+    return await res.json();
+  } catch {
+    return { ok: false };
   }
 }
 
@@ -264,9 +370,12 @@ export async function fetchWorkspaceFileTree(dir?: string): Promise<FileTreeNode
   return [];
 }
 
-export async function readWorkspaceFile(filePath: string): Promise<string> {
+export async function readWorkspaceFile(filePath: string, cwd?: string): Promise<string> {
   try {
-    const res = await fetchWithFallback(`/api/fs/read?path=${encodeURIComponent(filePath)}`, {
+    const query = `path=${encodeURIComponent(filePath)}${
+      cwd ? `&cwd=${encodeURIComponent(cwd)}` : ''
+    }`;
+    const res = await fetchWithFallback(`/api/fs/read?${query}`, {
       signal: AbortSignal.timeout(3000),
     });
     if (res.ok) {
@@ -279,12 +388,16 @@ export async function readWorkspaceFile(filePath: string): Promise<string> {
   return `// File: ${filePath}\n`;
 }
 
-export async function writeWorkspaceFile(filePath: string, content: string): Promise<boolean> {
+export async function writeWorkspaceFile(
+  filePath: string,
+  content: string,
+  cwd?: string
+): Promise<boolean> {
   try {
     const res = await fetchWithFallback('/api/fs/write', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: filePath, content }),
+      body: JSON.stringify({ path: filePath, content, cwd }),
       signal: AbortSignal.timeout(3000),
     });
     return res.ok;
@@ -335,31 +448,50 @@ export interface StreamTurnCallbacks {
   onRpcLog: (entry: JsonRpcLogEntry) => void;
 }
 
+function isInternalRustLogLine(line: string): boolean {
+  const trimmed = line.trim();
+  if (!trimmed) return true;
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(trimmed)) return true;
+  if (/\b(ERROR|WARN|INFO|DEBUG|TRACE)\b\s+codex_/.test(trimmed)) return true;
+  if (
+    trimmed.includes('codex_rmcp_client') ||
+    trimmed.includes('codex_models_manager') ||
+    trimmed.includes('refresh_transaction') ||
+    trimmed.includes('invalid_grant')
+  ) {
+    return true;
+  }
+  return false;
+}
+
 function extractReasoningText(rawItem: any): string {
   if (!rawItem) return '';
+  let candidate = '';
   if (typeof rawItem.text === 'string' && rawItem.text.trim()) {
-    return rawItem.text.trim();
-  }
-  if (Array.isArray(rawItem.summary)) {
-    const joined = rawItem.summary
+    candidate = rawItem.text.trim();
+  } else if (Array.isArray(rawItem.summary)) {
+    candidate = rawItem.summary
       .map((s: any) => (typeof s === 'string' ? s : s?.text || ''))
       .filter(Boolean)
-      .join('\n');
-    if (joined.trim()) return joined.trim();
-  }
-  if (Array.isArray(rawItem.content)) {
-    const joined = rawItem.content
+      .join('\n')
+      .trim();
+  } else if (Array.isArray(rawItem.content)) {
+    candidate = rawItem.content
       .map((c: any) => (typeof c === 'string' ? c : c?.text || ''))
       .filter(Boolean)
-      .join('\n');
-    if (joined.trim()) return joined.trim();
+      .join('\n')
+      .trim();
   }
-  return '';
+  if (!candidate) return '';
+  const cleanLines = candidate
+    .split('\n')
+    .filter((l) => !isInternalRustLogLine(l));
+  return cleanLines.join('\n').trim();
 }
 
 /**
  * Execute a real turn against the local machine's `codex` CLI (`POST /api/codex/turn-stream`)
- * and stream live JSONL events (`reasoning`, `todo_list`, `command_execution`, `file_change`, `agent_message`, `git.state`).
+ * with a clean, native-grade Thinking / Reasoning trace (zero stderr or synthetic log pollution).
  */
 export function runInteractiveAgentTurn(params: {
   threadId: string;
@@ -394,10 +526,21 @@ export function runInteractiveAgentTurn(params: {
     });
   };
 
+  // Start the live Thinking indicator immediately with an empty steps array (no synthetic "正在调用..." text!)
   const liveReasoningId = `item_live_reason_${Date.now()}`;
-  let liveReasoningAdded = false;
+  let liveReasoningAdded = true;
+  params.callbacks.onItemAdded({
+    id: liveReasoningId,
+    type: 'reasoning',
+    status: 'streaming',
+    timestamp: nowTime(),
+    durationSeconds: 1,
+    reasoningSteps: [],
+  });
 
-  const ensureLiveReasoning = (initialStep: string) => {
+  const appendCleanReasoningStep = (stepText: string) => {
+    const cleaned = stepText.trim();
+    if (!cleaned || isInternalRustLogLine(cleaned)) return;
     if (!liveReasoningAdded) {
       liveReasoningAdded = true;
       params.callbacks.onItemAdded({
@@ -405,13 +548,13 @@ export function runInteractiveAgentTurn(params: {
         type: 'reasoning',
         status: 'streaming',
         timestamp: nowTime(),
-        durationSeconds: 1,
-        reasoningSteps: [initialStep],
+        durationSeconds: Math.max(1, Math.round((Date.now() - startedAtMs) / 1000)),
+        reasoningSteps: [cleaned],
       });
     } else {
       params.callbacks.onItemUpdated(liveReasoningId, (prev) => {
         const steps = prev.reasoningSteps || [];
-        if (steps[steps.length - 1] === initialStep) {
+        if (steps[steps.length - 1] === cleaned) {
           return {
             ...prev,
             durationSeconds: Math.max(1, Math.round((Date.now() - startedAtMs) / 1000)),
@@ -420,7 +563,7 @@ export function runInteractiveAgentTurn(params: {
         return {
           ...prev,
           durationSeconds: Math.max(1, Math.round((Date.now() - startedAtMs) / 1000)),
-          reasoningSteps: [...steps, initialStep],
+          reasoningSteps: [...steps, cleaned],
         };
       });
     }
@@ -478,36 +621,13 @@ export function runInteractiveAgentTurn(params: {
 
           logNotification(evt.type || 'codex/event', evt);
 
-          if (evt.type === 'bridge.info') {
-            ensureLiveReasoning(evt.message || 'Connected to local Codex CLI');
-            continue;
-          }
-
           if (evt.type === 'thread.started' && evt.thread_id) {
             params.callbacks.onCliThreadStarted?.(evt.thread_id);
             continue;
           }
 
-          if (evt.type === 'error' && evt.message) {
-            if (/Reconnecting/i.test(evt.message)) {
-              ensureLiveReasoning(`网络波动自动重连中: ${evt.message}`);
-            }
-            continue;
-          }
-
-          if (evt.type === 'stderr.delta' && evt.text) {
-            const cleaned = String(evt.text).trim();
-            const isGarbage =
-              cleaned.length < 3 ||
-              /^[{}[\](),.;:'"`_-]+$/.test(cleaned) ||
-              cleaned.startsWith('at ') ||
-              cleaned.startsWith('Error: spawn') ||
-              cleaned.startsWith('errno:') ||
-              cleaned.startsWith('syscall:') ||
-              cleaned.startsWith('spawnargs:');
-            if (cleaned && !isGarbage && liveReasoningAdded) {
-              ensureLiveReasoning(cleaned);
-            }
+          // Ignore internal bridge.info and stderr.delta so they never pollute reasoningSteps
+          if (evt.type === 'bridge.info' || evt.type === 'stderr.delta' || evt.type === 'error') {
             continue;
           }
 
@@ -524,7 +644,7 @@ export function runInteractiveAgentTurn(params: {
             if (rawItem.type === 'reasoning') {
               const text = extractReasoningText(rawItem);
               if (text) {
-                ensureLiveReasoning(text);
+                appendCleanReasoningStep(text);
               }
             } else if (rawItem.type === 'todo_list') {
               const todoItems = Array.isArray(rawItem.items) ? rawItem.items : [];
@@ -543,7 +663,7 @@ export function runInteractiveAgentTurn(params: {
               }
             } else if (rawItem.type === 'command_execution') {
               if (evt.type === 'item.started' && rawItem.command) {
-                ensureLiveReasoning(`执行命令: \`${rawItem.command}\``);
+                appendCleanReasoningStep(`Running \`${rawItem.command}\``);
               }
               const uiItem: TurnItem = {
                 id: itemId,
@@ -571,6 +691,7 @@ export function runInteractiveAgentTurn(params: {
                 const fcId = `${itemId}_${ch.path}`;
                 if (!knownItemIds.has(fcId)) {
                   knownItemIds.add(fcId);
+                  appendCleanReasoningStep(`Edited \`${ch.path}\``);
                   params.callbacks.onItemAdded({
                     id: fcId,
                     type: 'fileChange',
@@ -650,7 +771,7 @@ export function runInteractiveAgentTurn(params: {
               type: 'agentMessage',
               status: 'failed',
               timestamp: nowTime(),
-              text: `**Codex 执行异常:** ${evt.error?.message || 'Execution failed'}`,
+              text: `**Codex 执行提示:** ${evt.error?.message || 'Execution failed'}`,
             });
             params.callbacks.onTurnStatusChange('completed');
           }

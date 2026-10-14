@@ -1,51 +1,47 @@
-# OpenAI Codex 桌面端深度审计与真实本机对齐方案 (Phase 2 Audit & Implementation Plan)
+# OpenAI Codex Desktop 深度重构与完善方案 (Phase 3 Audit & Architecture Plan)
 
-## 一、三张截图问题深度根因审计 (Root Cause Audit)
+## 一、五张实机运行截图与两处红框深度审计 (Forensic Audit)
 
-### 1. 图一报错：`Error: spawn /Users/zhangjinhui/.nvm/versions/node/v20.10.0/lib/node_modules/@openai/codex/vendor/aarch64-apple-darwin/codex/codex ENOENT`
-- **根因定位 (`server/codex-local-bridge.mjs`)**：
-  1. **PATH 优先级反转**：`buildAugmentedPath()` 在遍历 `~/.nvm/versions/node` 时使用了 `versions.sort().reverse()` 配合 `extraDirs.unshift(...)`，两次反转导致最旧的 `v20.10.0/bin` 被排在了 `PATH` 最前面，覆盖了本机 `/Applications/Codex.app/Contents/Resources`、`/opt/homebrew/bin` 以及更高版本的 Node (`v22+`)。
-  2. **缺乏可执行二进制健康探测 (`Health Probe`)**：`resolveCodexBinary()` 仅调用了 `fsSync.existsSync(candidate) && stat.isFile()`。由于 `v20.10.0/bin/codex` 是一个 JS 包装脚本（文件本身存在），被直接选中并缓存；但该旧版本下的原生二进制 `vendor/aarch64-apple-darwin/codex/codex` 缺失（macOS 常见 npm 可选依赖/XProtect 隔离问题），导致运行 `spawn` 时抛出 `ENOENT`。
-  3. **附带 UI 瑕疵**：
-     - 当 `stderr` 输出多行 Node.js 异常对象时，最后一行 `}` 被推入 `stderr.delta`，导致思考卡片标题显示 `已思考 1s · }`。
-     - 左侧边栏读取 `~/.codex/sessions/*.jsonl` 时，未过滤系统注入的 `# AGENTS.md instructions...` 与 `<codex_interactive_shell>` 等初始化块，导致历史会话标题显示为 `# AGENTS.md...` 和 `<codex_inter...`。
-
-- **修复方案**：
-  1. **重构二进制探测优先级与健康校验 (`resolveCodexBinary` & `probeCodexBinary`)**：
-     - 优先探测本机真实安装的官方桌面端内置 CLI（`/Applications/Codex.app/Contents/Resources/codex`、`/Applications/ChatGPT.app/Contents/Resources/codex`）与 Homebrew（`/opt/homebrew/bin/codex`、`/usr/local/bin/codex`）。
-     - 对 `~/.nvm/versions/node` 与 `fnm` 采用语义化版本号降序排列（最高版本优先），并同时探测 `@openai/codex-darwin-arm64` / `vendor` 原生二进制路径。
-     - **强制执行健康校验**：每个候选路径必须通过 `"${candidate}" --version` 实测（返回码 `0` 且无 `ENOENT`/`Error: spawn`），自动跳过损坏的 `v20.10.0` 包装脚本。
-     - **运行时自愈重试**：若运行期捕获 `ENOENT`，自动拉黑失效路径、强制刷新可用二进制并无缝重试。
-  2. **净化思考流与会话标题**：
-     - 过滤 `stderr` 中的堆栈跟踪与括号符号（`{`, `}`, `at ...`, `errno:`），确保思考标题只展示有意义的阶段摘要。
-     - 结合 `~/.codex/history.jsonl` 并剥离 `# AGENTS.md`、`<codex_interactive_shell>`、`<environment_context>`、`<INSTRUCTIONS>` 等系统注入标签，还原真实用户提问作为会话标题。
+### 1. 图三 (`67972F4B-390D-4D4A-81C9-DAD4627759D8.png`) 两处红框问题定位与修复
+- **左上角红框 (Red Box 1)**：
+  1. **双层红绿灯重叠**：macOS 原生窗口 (`NSWindowStyleMaskFullSizeContentView`) 在左上角 `(x: 14, y: 12)` 渲染了系统级红黄绿窗口按钮，而 `LeftSidebar.tsx` 在左侧 46px 窄栏顶部又渲染了一排 HTML 模拟红黄绿圆点，导致两套红黄绿按钮上下错位重叠。
+  2. **顶栏导航按钮 (`←` `→` `[|]`) 与 `Codex ⌄` 垂直错位**：真实 Codex App 顶栏第一行 (`h-10`) 左侧为系统红黄绿按钮，紧接着同一水平线右侧为 `←`、`→`、`[|]` 侧栏收起按钮；第二行左栏的 `主页 (Home)` 图标与右栏的 `Codex ⌄` 及 `🔔` `🔍` 严格处于同一水平线上。
+  - **修复方案**：移除 HTML 模拟红黄绿圆点，将左侧双栏顶部统一为 `h-10` 原生标题拖拽栏（左侧预留 72px 给 macOS 原生红黄绿按钮，右侧紧跟 `←` `→` `[|]`），第二行让 46px 窄栏的 `Home` 图标与 228px 侧栏的 `Codex ⌄` 像素级水平对齐。
+- **左下角红框 (Red Box 2)**：
+  1. **左窄栏底部悬空截断 & 侧边栏溢出裁剪**：`LeftSidebar.tsx` 外层容器与 `aside` 缺少 `min-h-0 overflow-hidden`，当 `最近` 会话列表较长时，`aside` 高度撑破 `100vh`，导致 `解释这是什么` 在窗口底边被拦腰截断，而 46px 窄栏停留在上方，造成左下角 `↓` 与 `XX` 头像下方出现一块突兀的断层空白。
+  2. **会话重复显示**：`项目 -> codex-test` 下重复出现了两条 `"你是什么模型"`，`最近` 下又出现了一条 `"你是什么模型"`（由于当前新建会话改名后与 `~/.codex/sessions` 同步回来的会话未按 `cliSessionId` / 标题去重）。
+  - **修复方案**：为侧边栏全部 Flex 纵向容器加上严格的 `h-full min-h-0 overflow-hidden`，确保 46px 窄栏与 228px 侧边栏底部 100% 贴齐窗口底边；对会话列表按 `cliSessionId` 与标题智能去重，并按每个会话实际的 `cwd` 归属到对应工作空间项目下。
 
 ---
 
-### 2. 图二问题：模型目录与本机真实 Codex App 模型目录不一致
-- **根因定位 (`server/codex-local-bridge.mjs` & `src/components/CenterThreadView.tsx`)**：
-  1. 真实 Codex App 的模型目录来自 `~/.codex/models_cache.json` 中的 `models` 数组。每个模型对象包含 `slug`、`display_name`、`description`、`visibility`（`"list"` | `"hide"` | `"none"`）、`priority`、`default_reasoning_level` 和 `supported_reasoning_levels`。
-  2. 此前 `discoverCachedModels()` 未过滤 `visibility`，把 `models_cache.json` 中 `visibility: "hide"` 或 `"none"` 的内部测试/隐藏模型（如 `gpt-reserve`、`gpt-daybreak-blue-latest`、`gpt-5.6-terra`、`gpt-5.6-luna` 等）以及硬编码的旧模型列表全部混入下拉框，且未按 `priority` 排序。
-
-- **修复方案**：
-  1. 新增 `discoverLocalModelCatalog(codexHome, codexBin)`，严格按照官方 Codex 模型管理器逻辑：
-     - 仅保留 `visibility === 'list'`（或用户当前在 `config.toml` 显式指定的默认模型），剔除 `visibility === 'hide'` / `'none'` 的内部隐藏模型。
-     - 严格按 `models_cache.json` 的 `priority` 升序排列。
-     - 提取每个模型的 `slug`、`displayName` (`display_name`)、`description`、`defaultReasoningLevel` 与 `supportedReasoningLevels`。
-  2. 前端模型选择器展示与真实 Codex App 一致的模型目录（含模型显示名称、描述与默认标记）。
+### 2. 图一、图二、图四、图五：思考与推理过程重构、消除 `ERROR` 显示与提升 Agent 运行流畅度
+- **问题根因分析**：
+  1. **内部 Rust 日志混入思考卡片**：`codex exec --json` 运行时，Rust `tracing` 会向 `stderr` 输出带时间戳的内部日志：
+     - `2026-10-14T07:04:39.340583Z ERROR codex_rmcp_client::oauth::refresh_transaction: error=failed to refresh OAuth tokens for server cloudflare-api...`
+     - `2026-10-14T07:04:40.041341Z ERROR codex_models_manager::manager: failed to refresh available models: request timed out`
+     旧版桥接层将 `stderr` 行作为 `stderr.delta` 推入了前端 `reasoningSteps`，导致思考卡片和标题栏显示满屏 `ERROR`。
+  2. **合成提示语与左边框裁切 (`D02852B2-22B5-4FFE-86FB-8AAF31B953C8.png`)**：
+     - 思考列表第一行被塞入了合成文本 `正在调用 GPT-6 Astra (推理强度: xhigh)`（即使用户选了 `最大` 也显示 `xhigh`），且粗白左边框贴近圆角边缘产生视觉裁切。
+  3. **Agent 启动耗时 31s ~ 83s 的核心性能瓶颈**：
+     - **瓶颈 A (`codex_models_manager` 超时)**：本机 `~/.codex/models_cache.json` 的 `"fetched_at"` 时间戳过期，导致每次启动 `codex exec` 时 CLI 都尝试联网刷新模型列表并等待 20~30 秒超时后才开始推理！
+     - **瓶颈 B (`cloudflare-api` MCP OAuth 刷新失败)**：本机 `~/.codex/config.toml` 中配置的 `cloudflare-api` MCP 服务 OAuth Token 已失效 (`invalid_grant`)，每次启动 `codex exec` 都要耗时重连刷新！
+- **重构与优化方案**：
+  1. **零延迟预热 `~/.codex/models_cache.json` (`touchModelsCacheFreshness`)**：每次调用前自动将 `~/.codex/models_cache.json` 的 `"fetched_at"` 更新为当前 ISO 时间戳，使 `codex_models_manager` 直接命中本地缓存（0ms 启动，彻底消除 `failed to refresh available models: request timed out` 的 30 秒卡顿）。
+  2. **自动隔离失效的远程 OAuth MCP 服务**：在执行 `codex exec` 时默认传入 `-c 'mcp_servers={}'`（除非用户指令明确提及 MCP），彻底消除 `cloudflare-api` OAuth 刷新失败带来的阻塞与报错。
+  3. **重构纯净的思考与推理流 (Thinking & Reasoning UI)**：
+     - 彻底移除 `正在调用 ...` 合成步骤与 `stderr` 日志注入，并在子进程注入 `RUST_LOG=off`。
+     - 仅展示模型真实输出的 `reasoning` 思考摘要（如 `Finishing navigation check`）与真实工具调用步骤（如 `执行命令`、`文件修改`）。
+     - 重构思考卡片样式（移除突兀的粗白竖线，改为细腻的时间轴圆点与呼吸动画，若某轮简单问答无中间推理步骤则自动隐藏空思考框）。
 
 ---
 
-### 3. 图三问题：模型推理程度目录与本机真实 Codex App 不一致
-- **根因定位 (`src/components/CenterThreadView.tsx`)**：
-  1. 真实 Codex App 的推理程度（Reasoning Effort）目录**由当前所选模型在 `models_cache.json` 中的 `supported_reasoning_levels` 动态决定**。
-  2. 对于主流模型（如 `gpt-6-astra`、`gpt-5.4`、`gpt-5.3-codex` 等），官方 `supported_reasoning_levels` 仅包含 **4 个标准档位**：
-     - **低 (Low)** (`low`)
-     - **中 (Medium)** (`medium`)
-     - **高 (High)** (`high`)
-     - **超高 (Extra high)** (`xhigh`)
-  3. 此前前端写死了包含 `极速 (Minimal)` 在内的 5 个固定档位，导致与真实 Codex App 的 4 档（或按模型动态变化的档位）不一致。
-
-- **修复方案**：
-  1. 前端推理强度弹窗直接读取当前选中模型的 `supportedReasoningLevels`（若模型支持 4 档 `low` / `medium` / `high` / `xhigh`，则精准渲染这 4 档及对应描述；仅当某模型显式声明支持 `minimal` 时才显示 `minimal`）。
-  2. 当切换模型时，若当前推理强度不在新模型的 `supportedReasoningLevels` 中，自动对齐到该模型的 `defaultReasoningLevel`。
+### 3. 新增多工作目录 / 工作空间创建、导入与切换系统 (Multi-Workspace Manager)
+- **功能设计**：
+  1. **后端接口 (`server/app-server.mjs` & `server/codex-local-bridge.mjs`)**：
+     - `GET /api/workspaces`：读取已保存的工作空间列表（持久化于 `~/.codex/desktop_workspaces.json` 并合并 `~/.codex/config.toml` 中的 `[projects]`），同时扫描 `~/Desktop` 下的现有项目目录供一键导入。
+     - `POST /api/workspaces/pick-folder`：调用 macOS 原生 `osascript` (`choose folder`) 弹出系统原生 Finder 文件夹选择窗口（内置原生「新建文件夹」按钮）。
+     - `POST /api/workspaces/create`：支持在指定父目录（如 `/Users/zhangjinhui/Desktop`）下一键新建工作目录、自动执行 `git init` 初始化仓库、生成 `AGENTS.md`，并持久化写入工作空间列表。
+     - `POST /api/workspaces/remove`：支持移除不再使用的工作空间。
+  2. **前端交互 (`LeftSidebar.tsx`, `CenterThreadView.tsx`, `Modals.tsx`)**：
+     - 侧边栏 `项目` 标题栏右侧新增 **`+`（新建/打开工作空间）** 按钮，支持管理多个项目目录，点击任意项目即刻切换当前工作目录 (`cwd`)、文件树与 Git 状态。
+     - 底部输入框上方 `📁 <当前项目名>` 按钮动态显示当前工作目录名称（不再固定显示 `选择项目`），点击弹出工作空间菜单，支持一键切换项目、**「+ 新建工作空间目录...」** 或 **「📂 从 Finder 选择本地目录...」**。

@@ -1,6 +1,6 @@
 /**
  * Unified HTTP API Router for OpenAI Codex Desktop App
- * Mounted by both `vite.config.ts` (dev middleware) and `server/app-server.mjs` (port 4500 / Electron / Native macOS & Windows app).
+ * Mounted by both `vite.config.ts` (dev middleware) and `server/app-server.mjs` (port 4500 / Native macOS & Windows app).
  */
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
@@ -9,10 +9,15 @@ import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
 import {
   buildAugmentedPath,
+  createOrAddWorkspace,
   inspectGitRepository,
   inspectLocalCodexEnvironment,
   interruptLocalCodexTurn,
+  listAllWorkspaces,
+  listDirectorySubfolders,
   openInMacApp,
+  pickNativeFolderDialog,
+  removeWorkspaceFromList,
   resolveCodexHomeDir,
   resolveRealHomeDir,
   streamLocalCodexTurn,
@@ -143,8 +148,8 @@ export async function handleJsonRpcMessage(msg, rawWorkspaceRoot = process.cwd()
     const threadId = params.threadId || `thr_${Date.now().toString(36)}`;
     const thread = {
       id: threadId,
-      title: params.title || 'New thread',
-      model: params.model || 'gpt-5.4',
+      title: params.title || '新聊天',
+      model: params.model || 'gpt-6.1-sol',
       cwd: params.cwd || workspaceRoot,
       createdAt: new Date().toISOString(),
       turns: [],
@@ -258,6 +263,67 @@ export async function handleApiRequest(req, res, rawWorkspaceRoot = process.cwd(
     return true;
   }
 
+  // 0. Multi-Workspace Management Endpoints
+  if (req.method === 'GET' && pathname === '/api/workspaces') {
+    try {
+      const data = await listAllWorkspaces(workspaceRoot);
+      sendJson(res, 200, data);
+    } catch (err) {
+      sendJson(res, 500, { error: String(err.message || err) });
+    }
+    return true;
+  }
+
+  if (req.method === 'GET' && pathname === '/api/fs/list-dirs') {
+    try {
+      const dir = url.searchParams.get('dir') || '';
+      const data = await listDirectorySubfolders(dir);
+      sendJson(res, 200, data);
+    } catch (err) {
+      sendJson(res, 500, { error: String(err.message || err) });
+    }
+    return true;
+  }
+
+  if (req.method === 'POST' && pathname === '/api/workspaces/create') {
+    try {
+      const body = await readJsonBody(req);
+      const result = await createOrAddWorkspace(body);
+      const tree = result.workspace
+        ? await listWorkspaceFiles(result.workspace.repoPath)
+        : [];
+      sendJson(res, 200, { ...result, tree });
+    } catch (err) {
+      sendJson(res, 500, { ok: false, error: String(err.message || err) });
+    }
+    return true;
+  }
+
+  if (req.method === 'POST' && pathname === '/api/workspaces/pick-folder') {
+    try {
+      const result = await pickNativeFolderDialog();
+      const tree =
+        result.ok && result.workspace
+          ? await listWorkspaceFiles(result.workspace.repoPath)
+          : [];
+      sendJson(res, 200, { ...result, tree });
+    } catch (err) {
+      sendJson(res, 500, { ok: false, error: String(err.message || err) });
+    }
+    return true;
+  }
+
+  if (req.method === 'POST' && pathname === '/api/workspaces/remove') {
+    try {
+      const body = await readJsonBody(req);
+      const result = await removeWorkspaceFromList(body.id || body.repoPath);
+      sendJson(res, 200, result);
+    } catch (err) {
+      sendJson(res, 500, { ok: false, error: String(err.message || err) });
+    }
+    return true;
+  }
+
   // 1. Local Codex Environment & Auth & Config Status
   if (req.method === 'GET' && pathname === '/api/codex/status') {
     try {
@@ -294,8 +360,13 @@ export async function handleApiRequest(req, res, rawWorkspaceRoot = process.cwd(
     try {
       const body = await readJsonBody(req);
       const updates = {};
-      if (body.model) updates.model = body.model;
-      if (body.reasoningEffort) updates.model_reasoning_effort = body.reasoningEffort;
+      if (body.model && body.model !== 'default') updates.model = body.model;
+      if (body.reasoningEffort) {
+        updates.model_reasoning_effort =
+          body.reasoningEffort === 'uhigh' || body.reasoningEffort === 'max'
+            ? 'xhigh'
+            : body.reasoningEffort;
+      }
       await updateGlobalCodexConfigKeys(updates);
       const updated = await inspectLocalCodexEnvironment(workspaceRoot);
       sendJson(res, 200, { ok: true, status: updated });
@@ -459,7 +530,7 @@ export async function handleApiRequest(req, res, rawWorkspaceRoot = process.cwd(
     return true;
   }
 
-  // 10. Open in External IDE / Terminal (`Cursor`, `VS Code`, `Ghostty`, `iTerm`, `Finder`, etc.)
+  // 10. Open in External IDE / Terminal
   if (req.method === 'POST' && pathname === '/api/open-in') {
     try {
       const { targetPath = workspaceRoot, appId = 'cursor' } = await readJsonBody(req);
@@ -479,13 +550,14 @@ export async function handleApiRequest(req, res, rawWorkspaceRoot = process.cwd(
     return true;
   }
 
-  // 12. Read File (supports both workspace files and ~/.codex/config.toml)
+  // 12. Read File
   if (req.method === 'GET' && pathname === '/api/fs/read') {
     const relPath = url.searchParams.get('path') || 'AGENTS.md';
+    const cwd = url.searchParams.get('cwd') || workspaceRoot;
     const realHome = resolveRealHomeDir();
     const expandedPath = relPath.startsWith('~/')
       ? path.join(realHome, relPath.slice(2))
-      : path.resolve(workspaceRoot, relPath);
+      : path.resolve(cwd, relPath);
     try {
       const content = await fs.readFile(expandedPath, 'utf8');
       sendJson(res, 200, { path: relPath, content });
@@ -498,11 +570,11 @@ export async function handleApiRequest(req, res, rawWorkspaceRoot = process.cwd(
   // 13. Write File
   if (req.method === 'POST' && pathname === '/api/fs/write') {
     try {
-      const { path: relPath, content } = await readJsonBody(req);
+      const { path: relPath, content, cwd = workspaceRoot } = await readJsonBody(req);
       const realHome = resolveRealHomeDir();
       const expandedPath = relPath.startsWith('~/')
         ? path.join(realHome, relPath.slice(2))
-        : path.resolve(workspaceRoot, relPath);
+        : path.resolve(cwd, relPath);
       await fs.mkdir(path.dirname(expandedPath), { recursive: true });
       await fs.writeFile(expandedPath, content, 'utf8');
       sendJson(res, 200, { ok: true, path: relPath });
@@ -512,7 +584,7 @@ export async function handleApiRequest(req, res, rawWorkspaceRoot = process.cwd(
     return true;
   }
 
-  // 14. Execute Shell / Terminal Command (with full PATH including local codex CLI)
+  // 14. Execute Shell / Terminal Command
   if (req.method === 'POST' && pathname === '/api/terminal/exec') {
     try {
       const { command, cwd } = await readJsonBody(req);
