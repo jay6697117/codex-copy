@@ -22,6 +22,21 @@ export type PersonalityMode = 'pragmatic' | 'empathetic';
 
 export type ReasoningEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 
+export interface CodexReasoningLevelOption {
+  effort: ReasoningEffort;
+  description: string;
+}
+
+export interface CodexModelInfo {
+  slug: string;
+  displayName: string;
+  description: string;
+  defaultReasoningLevel: ReasoningEffort;
+  supportedReasoningLevels: CodexReasoningLevelOption[];
+  visibility?: 'list' | 'hide' | 'none';
+  priority?: number;
+}
+
 export type ComposerMode = 'agent' | 'goal' | 'review';
 
 export type ExecutionEnvironmentMode = 'local' | 'worktree';
@@ -86,6 +101,7 @@ export interface LocalCodexStatus {
       sandboxMode: string;
       personality: string;
       availableModels?: string[];
+      modelCatalog?: CodexModelInfo[];
       modelProviders: Record<string, Record<string, unknown>>;
       mcpServers: Record<string, Record<string, unknown>>;
       projects: Record<string, Record<string, unknown>>;

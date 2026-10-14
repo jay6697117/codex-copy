@@ -495,7 +495,15 @@ export function runInteractiveAgentTurn(params: {
 
           if (evt.type === 'stderr.delta' && evt.text) {
             const cleaned = String(evt.text).trim();
-            if (cleaned && liveReasoningAdded) {
+            const isGarbage =
+              cleaned.length < 3 ||
+              /^[{}[\](),.;:'"`_-]+$/.test(cleaned) ||
+              cleaned.startsWith('at ') ||
+              cleaned.startsWith('Error: spawn') ||
+              cleaned.startsWith('errno:') ||
+              cleaned.startsWith('syscall:') ||
+              cleaned.startsWith('spawnargs:');
+            if (cleaned && !isGarbage && liveReasoningAdded) {
               ensureLiveReasoning(cleaned);
             }
             continue;

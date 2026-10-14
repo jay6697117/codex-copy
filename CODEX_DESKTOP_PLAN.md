@@ -1,34 +1,51 @@
-# OpenAI Codex Desktop App — 深度审计与真实 Codex App 体验对齐方案 (`CODEX_DESKTOP_PLAN.md`)
+# OpenAI Codex 桌面端深度审计与真实本机对齐方案 (Phase 2 Audit & Implementation Plan)
+
+## 一、三张截图问题深度根因审计 (Root Cause Audit)
+
+### 1. 图一报错：`Error: spawn /Users/zhangjinhui/.nvm/versions/node/v20.10.0/lib/node_modules/@openai/codex/vendor/aarch64-apple-darwin/codex/codex ENOENT`
+- **根因定位 (`server/codex-local-bridge.mjs`)**：
+  1. **PATH 优先级反转**：`buildAugmentedPath()` 在遍历 `~/.nvm/versions/node` 时使用了 `versions.sort().reverse()` 配合 `extraDirs.unshift(...)`，两次反转导致最旧的 `v20.10.0/bin` 被排在了 `PATH` 最前面，覆盖了本机 `/Applications/Codex.app/Contents/Resources`、`/opt/homebrew/bin` 以及更高版本的 Node (`v22+`)。
+  2. **缺乏可执行二进制健康探测 (`Health Probe`)**：`resolveCodexBinary()` 仅调用了 `fsSync.existsSync(candidate) && stat.isFile()`。由于 `v20.10.0/bin/codex` 是一个 JS 包装脚本（文件本身存在），被直接选中并缓存；但该旧版本下的原生二进制 `vendor/aarch64-apple-darwin/codex/codex` 缺失（macOS 常见 npm 可选依赖/XProtect 隔离问题），导致运行 `spawn` 时抛出 `ENOENT`。
+  3. **附带 UI 瑕疵**：
+     - 当 `stderr` 输出多行 Node.js 异常对象时，最后一行 `}` 被推入 `stderr.delta`，导致思考卡片标题显示 `已思考 1s · }`。
+     - 左侧边栏读取 `~/.codex/sessions/*.jsonl` 时，未过滤系统注入的 `# AGENTS.md instructions...` 与 `<codex_interactive_shell>` 等初始化块，导致历史会话标题显示为 `# AGENTS.md...` 和 `<codex_inter...`。
+
+- **修复方案**：
+  1. **重构二进制探测优先级与健康校验 (`resolveCodexBinary` & `probeCodexBinary`)**：
+     - 优先探测本机真实安装的官方桌面端内置 CLI（`/Applications/Codex.app/Contents/Resources/codex`、`/Applications/ChatGPT.app/Contents/Resources/codex`）与 Homebrew（`/opt/homebrew/bin/codex`、`/usr/local/bin/codex`）。
+     - 对 `~/.nvm/versions/node` 与 `fnm` 采用语义化版本号降序排列（最高版本优先），并同时探测 `@openai/codex-darwin-arm64` / `vendor` 原生二进制路径。
+     - **强制执行健康校验**：每个候选路径必须通过 `"${candidate}" --version` 实测（返回码 `0` 且无 `ENOENT`/`Error: spawn`），自动跳过损坏的 `v20.10.0` 包装脚本。
+     - **运行时自愈重试**：若运行期捕获 `ENOENT`，自动拉黑失效路径、强制刷新可用二进制并无缝重试。
+  2. **净化思考流与会话标题**：
+     - 过滤 `stderr` 中的堆栈跟踪与括号符号（`{`, `}`, `at ...`, `errno:`），确保思考标题只展示有意义的阶段摘要。
+     - 结合 `~/.codex/history.jsonl` 并剥离 `# AGENTS.md`、`<codex_interactive_shell>`、`<environment_context>`、`<INSTRUCTIONS>` 等系统注入标签，还原真实用户提问作为会话标题。
 
 ---
 
-## 一、 全面深度审计：为什么打包安装后的 App 与真实 Codex App 体验存在差异？
+### 2. 图二问题：模型目录与本机真实 Codex App 模型目录不一致
+- **根因定位 (`server/codex-local-bridge.mjs` & `src/components/CenterThreadView.tsx`)**：
+  1. 真实 Codex App 的模型目录来自 `~/.codex/models_cache.json` 中的 `models` 数组。每个模型对象包含 `slug`、`display_name`、`description`、`visibility`（`"list"` | `"hide"` | `"none"`）、`priority`、`default_reasoning_level` 和 `supported_reasoning_levels`。
+  2. 此前 `discoverCachedModels()` 未过滤 `visibility`，把 `models_cache.json` 中 `visibility: "hide"` 或 `"none"` 的内部测试/隐藏模型（如 `gpt-reserve`、`gpt-daybreak-blue-latest`、`gpt-5.6-terra`、`gpt-5.6-luna` 等）以及硬编码的旧模型列表全部混入下拉框，且未按 `priority` 排序。
 
-通过对打包产物 (`Codex Desktop.app` / `Codex Desktop.exe`)、本地桥接层 (`server/codex-local-bridge.mjs`)、前端状态流 (`src/services/appServerClient.ts`) 与工作区配置文件 (`.codex/config.toml`) 的逐行审计，定位出以下 **6 个核心根因 (Root Causes)**：
-
-| 编号 | 问题现象 | 根本原因 (Root Cause) | 修复与优化方案 |
-| :--- | :--- | :--- | :--- |
-| **RC-1** | **执行报错 (`执行报错`)：项目级 `.codex/config.toml` 污染本机配置** | 项目目录下 `.codex/config.toml` 残留了早期虚构配置 `model = "gpt-6.1-sol"` 及非官方 TOML 段 (`[app_server]`, `[skills]`, `reasoning_effort`)，且在打包时被复制进了 `Codex Desktop.app/Contents/Resources/app/.codex/config.toml`。真实 `codex` CLI 启动时会优先读取工作目录 `.codex/config.toml`，导致覆盖用户本机 `~/.codex/config.toml` (`model = "gpt-6-astra"`) 或触发 TOML 解析报错。 | 1. 清理 `.codex/config.toml` 中的虚构模型与非标字段，完全遵循 [OpenAI Codex `config.toml` 官方规范](https://learn.chatgpt.com/docs/config-file/config-reference)。<br>2. 在桥接层过滤掉任何历史残留的虚构模型名 (`gpt-6.1-sol`, `gpt-6-luna`)，优先使用本机 `~/.codex/config.toml` 中的真实模型。 |
-| **RC-2** | **执行报错 (`执行报错`)：`codex exec` 参数兼容性与 `stdin` 传递问题** | 1. 新建会话默认 `model` 被硬编码为 `'gpt-5.4'`，与本机 `~/.codex/config.toml` 的 `'gpt-6-astra'` 不一致，触发 `-m gpt-5.4`，若用户自定义 Provider 仅支持配置模型即报错。<br>2. `codex exec resume <id>` 子命令不支持部分顶层参数（如 `--skip-git-repo-check`、`-C`、`-s`），直接拼接会导致 CLI 退出码 2 ([Issue #6717](https://github.com/openai/codex/issues/6717))。<br>3. 多行 Prompt 作为命令行位置参数传递易受引号/换行截断。 | 1. 遵循 [OpenAI 非交互模式规范](https://learn.chatgpt.com/docs/non-interactive-mode)，改用 `codex exec --json -` 通过 **`stdin` 管道**安全写入完整 Prompt。<br>2. 默认模型设为跟随本机 `config.toml`（不额外传 `-m`），仅在用户显式切换其他模型时传 `-m`。<br>3. **智能三级回退重试机制**：若带 `resume` 或自定义 `-m`/`-c` 参数执行失败，自动回退为使用本机默认配置的 `codex exec --json --skip-git-repo-check -C <cwd> -` 无缝重试。 |
-| **RC-3** | **模型选择 (`模型选择`) 不真实、缺乏本机配置联动** | 底部模型选择器仅为原生 `<select>`，包含虚构模型名，且未读取 `~/.codex/models_cache.json` 或区分「本机 `config.toml` 默认模型」，也不支持自定义输入模型 ID 或同步回写 `config.toml`。 | 重构为 **官方风格模型选择弹窗 (Model Selector Popover)**：<br>1. 顶部置顶显示本机 `~/.codex/config.toml` 当前生效模型（如 `gpt-6-astra`）。<br>2. 自动扫描 `~/.codex/models_cache.json`、Profiles 与官方 Codex 模型列表 (`gpt-5.4`, `gpt-5.4-mini`, `gpt-5.3-codex`, `gpt-5.2-codex`, `gpt-5.1-codex-max`, `gpt-5.1-codex-mini`, `o3`, `o4-mini`)。<br>3. 支持手动输入任意自定义模型 ID，并支持一键「保存为本机默认模型」。 |
-| **RC-4** | **模型推理程度选择 (`模型推理程度选择`) 被截断失效** | 1. `codex.ts` 定义了 `'max'`，而 `CenterThreadView.tsx` 使用了 `'xhigh'`，类型不一致。<br>2. `server/codex-local-bridge.mjs` 第 723 行硬编码 `reasoningEffort === 'low' \|\| reasoningEffort === 'medium' ? reasoningEffort : 'high'`，导致用户选择 `超高 (xhigh)` 或 `极速 (minimal)` 时被强制改写为 `high`！ | 遵循 [OpenAI Codex 推理等级规范](https://kingy.ai/news/openai-codex-reasoning-levels-low-medium-high-extra-high/) 与 [Issue #26930](https://github.com/openai/codex/issues/26930)：<br>1. 统一支持 `minimal` (极速)、`low` (低/Light)、`medium` (中)、`high` (高)、`xhigh` (超高/Extra High) 五档推理程度。<br>2. 重构底部 **推理程度选择弹窗 (Reasoning Effort Popover)**，准确传递 `-c model_reasoning_effort="<level>"`。 |
-| **RC-5** | **推理 Thinking 过程 (`推理thinking过程`) 不显示或杂乱** | 1. 根据 [Codex `exec --json` 事件规范](https://takopi.dev/reference/runners/codex/exec-json-cheatsheet/)，必须启用 `model_reasoning_summary` (`auto` / `detailed`) 才会输出 `reasoning` 事件。<br>2. 前端把 `stderr.delta` 的 CLI 内部日志直接塞入 `reasoningSteps`，且默认折叠了思考卡片 (`isExpanded = false`)，无实时计时器。 | 1. 桥接层默认注入 `-c model_reasoning_summary="detailed"`，完整解析 `item.type === 'reasoning'`（含 `text` / `summary`）、`todo_list` 与 `command_execution`。<br>2. **思考过程流式展开 + 实时秒表计时**：思考进行中 (`streaming`) 自动展开显示最新推理标题与步骤，秒表实时跳动（`正在思考 3s...`），完成后展示 `已思考 Xs · N 个步骤` 并支持折叠。 |
-| **RC-6** | **打包安装后 (`Codex Desktop.app`) 端口冲突与工作目录问题** | 1. `CodexDesktopMac.m` 启动内嵌服务时若 4500 端口被旧进程占用，会导致启动失败或连上旧服务。<br>2. 安装到 `/Applications` 后，默认 `cwd` 指向了 `/Applications/Codex Desktop.app/Contents/Resources/app` 而非用户真实代码仓库。 | 1. `app-server.mjs` 与 `CodexDesktopMac.m` 增加旧端口清理与动态端口健康校验，通过 `/bin/zsh -ilc "which node"` 确保找到本机 Node。<br>2. 默认工作区自动定位到用户真实项目目录，并在侧边栏/顶栏新增 **「切换/添加本地项目目录」** 功能。 |
+- **修复方案**：
+  1. 新增 `discoverLocalModelCatalog(codexHome, codexBin)`，严格按照官方 Codex 模型管理器逻辑：
+     - 仅保留 `visibility === 'list'`（或用户当前在 `config.toml` 显式指定的默认模型），剔除 `visibility === 'hide'` / `'none'` 的内部隐藏模型。
+     - 严格按 `models_cache.json` 的 `priority` 升序排列。
+     - 提取每个模型的 `slug`、`displayName` (`display_name`)、`description`、`defaultReasoningLevel` 与 `supportedReasoningLevels`。
+  2. 前端模型选择器展示与真实 Codex App 一致的模型目录（含模型显示名称、描述与默认标记）。
 
 ---
 
-## 二、 实施计划 (`Phase 3 & Phase 4`)
+### 3. 图三问题：模型推理程度目录与本机真实 Codex App 不一致
+- **根因定位 (`src/components/CenterThreadView.tsx`)**：
+  1. 真实 Codex App 的推理程度（Reasoning Effort）目录**由当前所选模型在 `models_cache.json` 中的 `supported_reasoning_levels` 动态决定**。
+  2. 对于主流模型（如 `gpt-6-astra`、`gpt-5.4`、`gpt-5.3-codex` 等），官方 `supported_reasoning_levels` 仅包含 **4 个标准档位**：
+     - **低 (Low)** (`low`)
+     - **中 (Medium)** (`medium`)
+     - **高 (High)** (`high`)
+     - **超高 (Extra high)** (`xhigh`)
+  3. 此前前端写死了包含 `极速 (Minimal)` 在内的 5 个固定档位，导致与真实 Codex App 的 4 档（或按模型动态变化的档位）不一致。
 
-1. **清理并规范化 `.codex/config.toml`**
-   - 移除 `.codex/config.toml` 中的 `model = "gpt-6.1-sol"` 与非标 TOML 块，确保本机 `~/.codex/config.toml` 配置 100% 生效。
-2. **重构 `server/codex-local-bridge.mjs` 与 `server/api-router.mjs`**
-   - 新增 `~/.codex/models_cache.json` 与本机可用模型自动发现接口。
-   - 完整支持 `minimal` | `low` | `medium` | `high` | `xhigh` 推理等级与 `model_reasoning_summary="detailed"`。
-   - 改用 `stdin` 管道向 `codex exec --json` 传递 Prompt，实现 `resume` 失败自动回退与参数不兼容自动重试机制。
-   - 新增 `/api/workspace/select` 接口支持切换任意本地文件夹作为项目工作区。
-3. **重构前端模型选择器、推理程度选择器与 Thinking 思考流 (`src/components/CenterThreadView.tsx`, `src/services/appServerClient.ts`, `src/App.tsx`)**
-   - 实现官方风格的模型选择上拉菜单（支持跟随 `config.toml`、切换官方/本机模型、自定义模型 ID、一键写入 `config.toml`）与推理程度选择菜单。
-   - 实现实时展开的 Thinking 思考流卡片（带实时计时器、加粗阶段标题提取、步骤时间线）与 `todo_list` 进度清单渲染。
-4. **重新构建 macOS 与 Windows 安装包并实测验证 (`scripts/package-desktop.mjs`)**
-   - 优化 `CodexDesktopMac.m` 的 Node 探测（支持 `/bin/zsh -ilc "which node"`）、端口冲突自动接管与真实项目路径传递。
-   - 运行 `npm run package` 重新生成 `Codex Desktop.app`、`.pkg`、`.zip` 与 Windows `.exe`、`.zip`，并进行全链路实测验证。
+- **修复方案**：
+  1. 前端推理强度弹窗直接读取当前选中模型的 `supportedReasoningLevels`（若模型支持 4 档 `low` / `medium` / `high` / `xhigh`，则精准渲染这 4 档及对应描述；仅当某模型显式声明支持 `minimal` 时才显示 `minimal`）。
+  2. 当切换模型时，若当前推理强度不在新模型的 `supportedReasoningLevels` 中，自动对齐到该模型的 `defaultReasoningLevel`。

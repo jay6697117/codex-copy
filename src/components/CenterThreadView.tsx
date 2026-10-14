@@ -39,6 +39,7 @@ import {
 } from 'lucide-react';
 import {
   AppLanguage,
+  CodexModelInfo,
   ComposerMode,
   ExecutionEnvironmentMode,
   LocalCodexStatus,
@@ -211,66 +212,187 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
     return () => clearInterval(timer);
   }, [isRunning]);
 
-  const configuredModel = localCodexStatus?.config?.effective?.model || 'gpt-5.4';
-  const serverAvailableModels = localCodexStatus?.config?.effective?.availableModels || [];
-  const availableModels = Array.from(
-    new Set(
-      [
-        configuredModel,
-        thread.model,
-        ...serverAvailableModels,
-        'gpt-5.4',
-        'gpt-5.4-mini',
-        'gpt-5.3-codex',
-        'gpt-5.2-codex',
-        'gpt-5.1-codex-max',
-        'gpt-5.1-codex-mini',
-        'o3',
-        'o4-mini',
-      ].filter((m) => m && m !== 'gpt-6.1-sol' && m !== 'gpt-6-luna') as string[]
-    )
+  const HIDDEN_MODEL_SLUGS = new Set([
+    'gpt-6.1-sol',
+    'gpt-6-luna',
+    'gpt-6-astra',
+    'gpt-6-sol',
+    'gpt-reserve',
+    'gpt-5.6-sol',
+    'gpt-5.6-terra',
+    'gpt-5.6-luna',
+    'gpt-daybreak-blue-latest',
+    'gpt-5.5',
+    'codex-auto-review',
+  ]);
+
+  const DEFAULT_4_REASONING_LEVELS: Array<{
+    effort: ReasoningEffort;
+    description: string;
+  }> = [
+    { effort: 'low', description: 'Fast responses with lighter reasoning' },
+    {
+      effort: 'medium',
+      description: 'Balances speed and reasoning depth for everyday tasks',
+    },
+    { effort: 'high', description: 'Greater reasoning depth for complex problems' },
+    {
+      effort: 'xhigh',
+      description: 'Extra high reasoning depth for complex problems',
+    },
+  ];
+
+  const FALLBACK_MODEL_CATALOG: CodexModelInfo[] = [
+    {
+      slug: 'gpt-5.4',
+      displayName: 'gpt-5.4',
+      description:
+        lang === 'zh-CN'
+          ? '最新旗舰级智能体编程模型，兼顾深度推理与代码生成'
+          : 'Latest frontier agentic coding model.',
+      defaultReasoningLevel: 'medium',
+      supportedReasoningLevels: DEFAULT_4_REASONING_LEVELS,
+    },
+    {
+      slug: 'gpt-5.4-mini',
+      displayName: 'gpt-5.4-mini',
+      description:
+        lang === 'zh-CN'
+          ? '高响应速度的轻量旗舰编程模型'
+          : 'Faster frontier model for responsive coding tasks.',
+      defaultReasoningLevel: 'medium',
+      supportedReasoningLevels: DEFAULT_4_REASONING_LEVELS,
+    },
+    {
+      slug: 'gpt-5.3-codex',
+      displayName: 'gpt-5.3-codex',
+      description:
+        lang === 'zh-CN'
+          ? '专为 Codex 软件工程深度优化的旗舰模型'
+          : 'Frontier Codex-optimized agentic software engineering model.',
+      defaultReasoningLevel: 'medium',
+      supportedReasoningLevels: DEFAULT_4_REASONING_LEVELS,
+    },
+    {
+      slug: 'gpt-5.2-codex',
+      displayName: 'gpt-5.2-codex',
+      description:
+        lang === 'zh-CN'
+          ? '稳定高效的智能体代码工程模型'
+          : 'Frontier agentic coding model.',
+      defaultReasoningLevel: 'medium',
+      supportedReasoningLevels: DEFAULT_4_REASONING_LEVELS,
+    },
+    {
+      slug: 'gpt-5.1-codex-max',
+      displayName: 'gpt-5.1-codex-max',
+      description:
+        lang === 'zh-CN'
+          ? '针对深度架构重构与长周期任务优化的 Codex 旗舰模型'
+          : 'Codex-optimized flagship for deep and fast reasoning.',
+      defaultReasoningLevel: 'medium',
+      supportedReasoningLevels: DEFAULT_4_REASONING_LEVELS,
+    },
+    {
+      slug: 'gpt-5.1-codex-mini',
+      displayName: 'gpt-5.1-codex-mini',
+      description:
+        lang === 'zh-CN'
+          ? '更轻快经济的 Codex 编程辅助模型'
+          : 'Optimized for codex. Cheaper, faster, but less capable.',
+      defaultReasoningLevel: 'medium',
+      supportedReasoningLevels: [
+        {
+          effort: 'medium',
+          description: 'Dynamically adjusts reasoning based on the task',
+        },
+        {
+          effort: 'high',
+          description: 'Maximizes reasoning depth for complex or ambiguous problems',
+        },
+      ],
+    },
+  ];
+
+  const rawConfiguredModel = localCodexStatus?.config?.effective?.model || 'gpt-5.4';
+  const configuredModel = HIDDEN_MODEL_SLUGS.has(rawConfiguredModel)
+    ? 'gpt-5.4'
+    : rawConfiguredModel;
+
+  const serverCatalog = (localCodexStatus?.config?.effective?.modelCatalog || []).filter(
+    (m) => m && m.slug && !HIDDEN_MODEL_SLUGS.has(m.slug)
   );
+
+  const modelCatalog: CodexModelInfo[] =
+    serverCatalog.length > 0 ? serverCatalog : FALLBACK_MODEL_CATALOG;
+
+  const activeModelSlug = HIDDEN_MODEL_SLUGS.has(thread.model)
+    ? configuredModel
+    : thread.model || configuredModel;
+
+  const selectedModelMeta: CodexModelInfo =
+    modelCatalog.find((m) => m.slug === activeModelSlug) ||
+    modelCatalog.find((m) => m.slug === configuredModel) ||
+    modelCatalog[0];
+
+  const allEffortMetaMap: Record<
+    ReasoningEffort,
+    { label: string; shortLabel: string; defaultDesc: string }
+  > = {
+    minimal: {
+      label: i18n.thread.effortMinimal,
+      shortLabel: lang === 'zh-CN' ? '推理：极速' : 'Minimal',
+      defaultDesc: i18n.thread.effortMinimalDesc,
+    },
+    low: {
+      label: i18n.thread.effortLow,
+      shortLabel: lang === 'zh-CN' ? '推理：低' : 'Low',
+      defaultDesc: i18n.thread.effortLowDesc,
+    },
+    medium: {
+      label: i18n.thread.effortMedium,
+      shortLabel: lang === 'zh-CN' ? '推理：中' : 'Medium',
+      defaultDesc: i18n.thread.effortMediumDesc,
+    },
+    high: {
+      label: i18n.thread.effortHigh,
+      shortLabel: lang === 'zh-CN' ? '推理：高' : 'High',
+      defaultDesc: i18n.thread.effortHighDesc,
+    },
+    xhigh: {
+      label: i18n.thread.effortExtraHigh,
+      shortLabel: lang === 'zh-CN' ? '推理：超高' : 'Extra High',
+      defaultDesc: i18n.thread.effortExtraHighDesc,
+    },
+  };
+
+  const modelSupportedLevels =
+    selectedModelMeta?.supportedReasoningLevels &&
+    selectedModelMeta.supportedReasoningLevels.length > 0
+      ? selectedModelMeta.supportedReasoningLevels
+      : DEFAULT_4_REASONING_LEVELS;
 
   const effortOptions: Array<{
     id: ReasoningEffort;
     label: string;
     shortLabel: string;
     desc: string;
-  }> = [
-    {
-      id: 'minimal',
-      label: i18n.thread.effortMinimal,
-      shortLabel: lang === 'zh-CN' ? '推理：极速' : 'Minimal',
-      desc: i18n.thread.effortMinimalDesc,
-    },
-    {
-      id: 'low',
-      label: i18n.thread.effortLow,
-      shortLabel: lang === 'zh-CN' ? '推理：低' : 'Low',
-      desc: i18n.thread.effortLowDesc,
-    },
-    {
-      id: 'medium',
-      label: i18n.thread.effortMedium,
-      shortLabel: lang === 'zh-CN' ? '推理：中' : 'Medium',
-      desc: i18n.thread.effortMediumDesc,
-    },
-    {
-      id: 'high',
-      label: i18n.thread.effortHigh,
-      shortLabel: lang === 'zh-CN' ? '推理：高' : 'High',
-      desc: i18n.thread.effortHighDesc,
-    },
-    {
-      id: 'xhigh',
-      label: i18n.thread.effortExtraHigh,
-      shortLabel: lang === 'zh-CN' ? '推理：超高' : 'Extra High',
-      desc: i18n.thread.effortExtraHighDesc,
-    },
-  ];
+    isModelDefault: boolean;
+  }> = modelSupportedLevels.map((lvl) => {
+    const meta = allEffortMetaMap[lvl.effort] || allEffortMetaMap.medium;
+    return {
+      id: lvl.effort,
+      label: meta.label,
+      shortLabel: meta.shortLabel,
+      desc: lang === 'zh-CN' ? meta.defaultDesc : lvl.description || meta.defaultDesc,
+      isModelDefault: lvl.effort === (selectedModelMeta?.defaultReasoningLevel || 'medium'),
+    };
+  });
 
   const currentEffortMeta =
-    effortOptions.find((e) => e.id === thread.reasoningEffort) || effortOptions[3];
+    effortOptions.find((e) => e.id === thread.reasoningEffort) ||
+    effortOptions.find((e) => e.isModelDefault) ||
+    effortOptions[effortOptions.length - 1];
 
   const toggleItemExpand = (itemId: string, currentlyOpen: boolean) => {
     setExpandedItems((prev) => ({ ...prev, [itemId]: !currentlyOpen }));
@@ -500,11 +622,32 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
 
   const extractLatestHeadline = (steps?: string[]): string => {
     if (!steps || steps.length === 0) return '';
-    const last = steps[steps.length - 1] || '';
-    const boldMatch = last.match(/\*\*(.+?)\*\*/);
-    if (boldMatch) return boldMatch[1];
-    const firstLine = last.split('\n')[0].trim();
-    return firstLine.length > 52 ? `${firstLine.slice(0, 52)}...` : firstLine;
+    for (let i = steps.length - 1; i >= 0; i--) {
+      const step = (steps[i] || '').trim();
+      if (!step) continue;
+      const boldMatch = step.match(/\*\*(.+?)\*\*/);
+      if (boldMatch && boldMatch[1].trim().length > 1) {
+        return boldMatch[1].trim();
+      }
+      const lines = step
+        .split('\n')
+        .map((l) => l.trim())
+        .filter(
+          (l) =>
+            l.length >= 2 &&
+            !/^[{}[\](),.;:'"`_-]+$/.test(l) &&
+            !l.startsWith('at ') &&
+            !l.startsWith('Error: spawn') &&
+            !l.startsWith('errno:') &&
+            !l.startsWith('syscall:') &&
+            !l.startsWith('spawnargs:')
+        );
+      if (lines.length > 0) {
+        const candidate = lines[0];
+        return candidate.length > 52 ? `${candidate.slice(0, 52)}...` : candidate;
+      }
+    }
+    return '';
   };
 
   const renderTurnItem = (turnId: string, item: TurnItem) => {
@@ -1338,9 +1481,9 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
             </div>
           )}
 
-          {/* Popover: Official Codex Model Selector Menu */}
+          {/* Popover: Official Codex Model Selector Menu (Synced with ~/.codex/models_cache.json visibility="list") */}
           {showModelMenu && (
-            <div className="absolute bottom-full left-12 mb-2 w-80 rounded-xl codex-elevated border codex-border shadow-2xl p-2 z-30 space-y-2">
+            <div className="absolute bottom-full left-12 mb-2 w-84 rounded-xl codex-elevated border codex-border shadow-2xl p-2 z-30 space-y-2">
               <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider codex-text-muted flex items-center justify-between">
                 <span>{i18n.thread.selectModelTitle}</span>
                 <button onClick={() => setShowModelMenu(false)}>
@@ -1348,38 +1491,58 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
                 </button>
               </div>
 
-              <div className="max-h-56 overflow-y-auto space-y-0.5">
-                {availableModels.map((m) => {
-                  const isCurrent = thread.model === m;
-                  const isConfigDefault = m === configuredModel;
+              <div className="max-h-64 overflow-y-auto space-y-1">
+                {modelCatalog.map((m) => {
+                  const isCurrent = activeModelSlug === m.slug;
+                  const isConfigDefault = m.slug === configuredModel;
+                  const supportedSet = new Set(
+                    (m.supportedReasoningLevels || []).map((l) => l.effort)
+                  );
                   return (
                     <button
-                      key={m}
+                      key={m.slug}
                       type="button"
                       onClick={() => {
+                        const nextEffort = supportedSet.has(thread.reasoningEffort)
+                          ? thread.reasoningEffort
+                          : (m.defaultReasoningLevel as ReasoningEffort) || 'medium';
                         onUpdateThreadConfig(
                           thread.id,
-                          { model: m as ModelId },
+                          {
+                            model: m.slug as ModelId,
+                            reasoningEffort: nextEffort,
+                          },
                           syncModelToConfig
                         );
                         setShowModelMenu(false);
                       }}
-                      className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs flex items-center justify-between transition-colors ${
+                      className={`w-full text-left px-2.5 py-2 rounded-lg text-xs flex items-start justify-between gap-2 transition-colors ${
                         isCurrent
                           ? 'codex-active codex-text-primary font-medium'
                           : 'codex-text-secondary codex-hover'
                       }`}
                     >
-                      <div className="flex items-center gap-2 min-w-0">
-                        <Cpu className="w-3.5 h-3.5 codex-accent-text shrink-0" />
-                        <span className="font-mono truncate">{m}</span>
-                        {isConfigDefault && (
-                          <span className="text-[10px] px-1.5 py-0.2 rounded codex-accent-soft shrink-0">
-                            {i18n.thread.configDefaultBadge}
+                      <div className="space-y-0.5 min-w-0 flex-1">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <Cpu className="w-3.5 h-3.5 codex-accent-text shrink-0" />
+                          <span className="font-mono font-medium codex-text-primary truncate">
+                            {m.displayName || m.slug}
                           </span>
+                          {isConfigDefault && (
+                            <span className="text-[10px] px-1.5 py-0.2 rounded codex-accent-soft shrink-0">
+                              {i18n.thread.configDefaultBadge}
+                            </span>
+                          )}
+                        </div>
+                        {m.description && (
+                          <div className="text-[11px] codex-text-muted pl-5.5 leading-snug line-clamp-2">
+                            {m.description}
+                          </div>
                         )}
                       </div>
-                      {isCurrent && <Check className="w-3.5 h-3.5 codex-accent-text shrink-0" />}
+                      {isCurrent && (
+                        <Check className="w-3.5 h-3.5 codex-accent-text shrink-0 mt-0.5" />
+                      )}
                     </button>
                   );
                 })}
@@ -1440,18 +1603,20 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
             </div>
           )}
 
-          {/* Popover: Official Codex 5-Level Reasoning Effort Menu */}
+          {/* Popover: Official Per-Model Reasoning Effort Menu (Synced with supported_reasoning_levels) */}
           {showEffortMenu && (
             <div className="absolute bottom-full left-36 mb-2 w-80 rounded-xl codex-elevated border codex-border shadow-2xl p-2 z-30 space-y-1">
               <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider codex-text-muted flex items-center justify-between">
-                <span>{i18n.thread.selectEffortTitle}</span>
+                <span>
+                  {i18n.thread.selectEffortTitle} · {selectedModelMeta.displayName}
+                </span>
                 <button onClick={() => setShowEffortMenu(false)}>
                   <X className="w-3 h-3" />
                 </button>
               </div>
 
               {effortOptions.map((opt) => {
-                const isSelected = thread.reasoningEffort === opt.id;
+                const isSelected = currentEffortMeta.id === opt.id;
                 return (
                   <button
                     key={opt.id}
@@ -1476,6 +1641,11 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
                         <span className="text-[10px] font-mono px-1.5 py-0.2 rounded codex-card border codex-border codex-text-muted">
                           {opt.id}
                         </span>
+                        {opt.isModelDefault && (
+                          <span className="text-[10px] px-1.5 py-0.2 rounded codex-accent-soft">
+                            {lang === 'zh-CN' ? '默认' : 'Default'}
+                          </span>
+                        )}
                       </div>
                       <div className="text-[11px] codex-text-muted leading-snug">
                         {opt.desc}
@@ -1708,7 +1878,7 @@ export const CenterThreadView: React.FC<CenterThreadViewProps> = ({
                   title={i18n.thread.selectModelTitle}
                 >
                   <Cpu className="w-3.5 h-3.5 codex-accent-text" />
-                  <span className="font-mono">{thread.model || configuredModel}</span>
+                  <span className="font-mono">{selectedModelMeta?.displayName || activeModelSlug}</span>
                   <ChevronDown className="w-3 h-3 codex-text-muted" />
                 </button>
 

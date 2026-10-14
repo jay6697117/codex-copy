@@ -194,9 +194,13 @@ export function App() {
         }));
 
         setThreads((prev) => {
-          const existingIds = new Set(prev.map((th) => th.id));
+          const importedMap = new Map(importedThreads.map((th) => [th.id, th]));
+          const updatedPrev = prev.map((th) =>
+            importedMap.has(th.id) ? importedMap.get(th.id)! : th
+          );
+          const existingIds = new Set(updatedPrev.map((th) => th.id));
           const fresh = importedThreads.filter((th) => !existingIds.has(th.id));
-          return [...prev, ...fresh];
+          return [...updatedPrev, ...fresh];
         });
       }
 
