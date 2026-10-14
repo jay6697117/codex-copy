@@ -23,6 +23,7 @@ const __dirname = path.dirname(__filename);
 const ROOT_DIR = path.resolve(__dirname, '..');
 const BUILD_DIR = path.join(ROOT_DIR, 'build');
 const RELEASE_DIR = path.join(ROOT_DIR, 'release');
+const PUBLIC_DIR = path.join(ROOT_DIR, 'public');
 
 const AUG_PATH = `/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${process.env.PATH || ''}`;
 
@@ -127,8 +128,9 @@ const ICON_GRADIENT = [
  * @param size  Output edge length in px.
  * @param bodyHalf  Tile half-width relative to canvas. 0.4023 = Apple's 824/1024 grid (macOS);
  *                  Windows icons use a larger tile without drop shadow.
+ * @param square  Fill the whole canvas (no rounded corners), for platforms that apply their own mask (iOS).
  */
-function generateAppIconPng(size = 512, { bodyHalf = 0.4023, dropShadow = true } = {}) {
+function generateAppIconPng(size = 512, { bodyHalf = 0.4023, dropShadow = true, square = false } = {}) {
   const rawData = Buffer.alloc(size * (size * 4 + 1));
   const pixel = 1 / size;
   const glyphScale = bodyHalf / 0.4023;
@@ -143,7 +145,7 @@ function generateAppIconPng(size = 512, { bodyHalf = 0.4023, dropShadow = true }
       const nx = (x + 0.5) / size - 0.5;
       const ny = (y + 0.5) / size - 0.5;
 
-      const bodyA = clamp01(0.5 - sdSquircle(nx, ny, bodyHalf) / pixel);
+      const bodyA = square ? 1 : clamp01(0.5 - sdSquircle(nx, ny, bodyHalf) / pixel);
       const shadowA = dropShadow
         ? 0.32 * (1 - smoothstep(-0.012, 0.022, sdSquircle(nx, ny - 0.012, bodyHalf)))
         : 0;
@@ -703,7 +705,24 @@ async function writeAppIcons() {
     ])
   );
 
-  return { iconPngPath, iconIcoPath, iconIcnsPath };
+  // Web: browser tab icon + iOS home-screen icon (served from Vite's `public/`)
+  await fs.mkdir(PUBLIC_DIR, { recursive: true });
+  const faviconPath = path.join(PUBLIC_DIR, 'favicon.ico');
+  const appleTouchIconPath = path.join(PUBLIC_DIR, 'apple-touch-icon.png');
+  await fs.writeFile(
+    faviconPath,
+    generateWindowsIco([
+      { size: 48, buf: winIcon(48) },
+      { size: 32, buf: winIcon(32) },
+      { size: 16, buf: winIcon(16) },
+    ])
+  );
+  await fs.writeFile(
+    appleTouchIconPath,
+    generateAppIconPng(180, { bodyHalf: 0.5, dropShadow: false, square: true })
+  );
+
+  return { iconPngPath, iconIcoPath, iconIcnsPath, faviconPath, appleTouchIconPath };
 }
 
 async function main() {
@@ -715,7 +734,7 @@ async function main() {
   console.log('[1/4] Building production TypeScript & Vite frontend (`dist/`)...');
   runCmd('npm run build');
 
-  // Step 2: Generate Icons (`build/icon.png`, `build/icon.icns`, `build/icon.ico`)
+  // Step 2: Generate Icons (`build/icon.png`, `build/icon.icns`, `build/icon.ico`, `public/` web icons)
   console.log('\n[2/4] Generating macOS (.icns) & Windows (.ico) application icons...');
   const { iconIcoPath, iconIcnsPath } = await writeAppIcons();
 

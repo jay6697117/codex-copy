@@ -32,7 +32,7 @@ import {
   SubfolderEntry,
 } from '../services/appServerClient';
 import { t } from '../i18n/translations';
-import { DEFAULT_DESKTOP_PATH, DEFAULT_HOME_PATH } from '../services/runtimeConfig';
+import { DEFAULT_DESKTOP_PATH, DEFAULT_HOME_PATH, IS_PUBLIC_SITE } from '../services/runtimeConfig';
 
 interface WorkspaceManagerModalProps {
   lang: AppLanguage;
@@ -205,14 +205,14 @@ export const WorkspaceManagerModal: React.FC<WorkspaceManagerModalProps> = ({
                   onClick={() => setParentDir(DEFAULT_DESKTOP_PATH || browseDir)}
                   className="px-2.5 py-2 rounded-xl bg-white/[0.06] hover:bg-white/10 text-xs text-[#A1A1A6] hover:text-white"
                 >
-                  桌面 (Desktop)
+                  {IS_PUBLIC_SITE ? '当前目录' : '桌面 (Desktop)'}
                 </button>
                 <button
                   type="button"
                   onClick={() => setParentDir(DEFAULT_HOME_PATH || browseParentDir)}
                   className="px-2.5 py-2 rounded-xl bg-white/[0.06] hover:bg-white/10 text-xs text-[#A1A1A6] hover:text-white"
                 >
-                  主目录 (~)
+                  {IS_PUBLIC_SITE ? '上级目录' : '主目录 (~)'}
                 </button>
               </div>
             </div>
