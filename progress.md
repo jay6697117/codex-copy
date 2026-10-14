@@ -5,7 +5,13 @@
 - 复用 `.openai/hosting.json` 中的原站点 ID；未新建站点或变更已有访问策略。
 - 主项目 `npm run build` 完成，退出码 0；`npm run test:site` 为 2/2 通过；初始 `git diff --check` 通过。
 - 只读代理完成源文件对比，确认需要同步一处连接文案，保留公开构建配置。
-- 下一步：使用 Sites 源码助手打开副本，同步文案、构建并发布。
+- Sites 源码助手打开原副本成功；仅同步 `src/App.tsx` 的一行文案，统一差异和逐词差异已核对，`git diff --check` 通过。
+- 副本 `npm run test:site` 为 2/2 通过；`build-site.mjs` 调用公开模式 `npm run build` 成功，TypeScript 与 Vite 均通过。
+- 源码提交：`89db81cd5a5d99a620e33ca20778a13e9f8b5277`；归档：`.sites/codex-workbench-20261014-v2.tar.gz`。
+- 保存版本 2：`appgprj_6acf3fbbd9d08191b83c4094cd91bf71~appgver_5a7cf24c7ec48191a16b3abe9bf45118`。
+- 部署：`appgdep_6acf48af7cc88191b276f3679b087e06`，原生返回 `succeeded`，无需继续轮询。
+- 发布后读取站点为 `active`、`public`、版本 2，浏览器刷新已显示新的桌面版安装提示。保留原站点页面供用户查看。
+- 本轮完成；未修改主仓库应用代码、提交主仓库历史或纳入并行桌面打包变更。
 
 ## 历史记录
 

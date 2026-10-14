@@ -6,6 +6,7 @@
 - 主仓库提交 `9eaf340` 比 Sites 源码提交 `7ac3f7e2cc06cd7ba9da1128e168c8928c09c02d` 更新，网页差异仅为 `src/App.tsx` 的连接说明改为先安装桌面版 APP。
 - Sites 副本 `package.json` 的 `build` 带 `--mode sites`，必须保留；当前公开静态资源和其余应用源码一致。
 - 浏览器中原站点正常展示，仍显示旧的 `npm run server` 提示；需要新版发布。
+- 发布后证据：版本 2 源码提交 `89db81cd5a5d99a620e33ca20778a13e9f8b5277`，部署终态 `succeeded`；再次读取站点确认为 `public`、版本 2。浏览器刷新后已显示“请先安装桌面版APP，再连接本机服务。”。
 
 ## 历史记录
 

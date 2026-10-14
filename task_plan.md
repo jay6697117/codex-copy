@@ -3,9 +3,10 @@
 ## 当前任务：`sites-public-republish-20261014`
 
 - 目标：将当前 Codex 网页工作台更新发布到原 Sites 地址，保持所有人可见。
-- 状态：进行中；已核查线上版本 1 为 `succeeded`、权限为 `public`，当前源码有一处连接提示更新。
+- 状态：完成；版本 2 部署 `succeeded`，权限保持 `public`，浏览器已显示新的桌面版安装提示。
 - 已完成：主项目 `npm run build`、`npm run test:site`（2/2）和工作区差异检查。
-- 待完成：打开已有 Sites 源码仓库，同步 `src/App.tsx`，公开模式构建打包，发布新版，验证线上文案和权限。
+- 已完成：打开已有 Sites 源码仓库，同步 `src/App.tsx`，公开模式构建打包，发布新版，验证线上文案和权限。
+- 交付地址：https://codex-workbench-stevezhang.qilei991012.chatgpt.site
 - 边界：保留 Sites 副本的公开构建配置；保留其他工作产生的桌面打包文件和变更。
 
 ## 历史任务：首次公开部署
