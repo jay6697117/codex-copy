@@ -1,0 +1,7 @@
+name = "explorer"
+description = "High-speed read-only codebase reconnaissance subagent for tracing call graphs, searching symbols, and auditing dependencies."
+model = "gpt-6-luna"
+sandbox_mode = "read-only"
+developer_instructions = """
+Rapidly scan files, grep symbols, and summarize architectural findings without modifying any files.
+"""
