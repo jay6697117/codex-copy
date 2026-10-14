@@ -1,6 +1,6 @@
 export type CodexSurface = 'codex' | 'work' | 'chat';
 
-export type ThemeSkin = 'wechat' | 'qq' | 'dingtalk';
+export type ThemeSkin = 'codex' | 'wechat' | 'qq' | 'dingtalk';
 
 export type AppLanguage = 'zh-CN' | 'en-US';
 
@@ -20,7 +20,14 @@ export type ModelId = string;
 
 export type PersonalityMode = 'pragmatic' | 'empathetic';
 
-export type ReasoningEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+export type ReasoningEffort =
+  | 'minimal'
+  | 'low'
+  | 'medium'
+  | 'high'
+  | 'xhigh'
+  | 'uhigh'
+  | 'max';
 
 export interface CodexReasoningLevelOption {
   effort: ReasoningEffort;
@@ -254,6 +261,7 @@ export interface Thread {
   cwd?: string;
   environmentMode?: ExecutionEnvironmentMode;
   permissionMode?: PermissionMode;
+  daybreakEnabled?: boolean;
   goal?: ThreadGoal | null;
   model: ModelId;
   personality: PersonalityMode;

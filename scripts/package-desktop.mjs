@@ -397,7 +397,7 @@ const MACOS_OBJC_SOURCE = `#import <Cocoa/Cocoa.h>
     [self.window setTitlebarAppearsTransparent:YES];
     [self.window setTitleVisibility:NSWindowTitleHidden];
     [self.window setMinSize:NSMakeSize(1020, 680)];
-    [self.window setBackgroundColor:[NSColor colorWithSRGBRed:0.96 green:0.96 blue:0.96 alpha:1.0]];
+    [self.window setBackgroundColor:[NSColor colorWithSRGBRed:0.067 green:0.067 blue:0.067 alpha:1.0]];
 
     WKWebViewConfiguration *config = [[WKWebViewConfiguration alloc] init];
     [config.preferences setValue:@YES forKey:@"developerExtrasEnabled"];
@@ -428,10 +428,10 @@ const MACOS_OBJC_SOURCE = `#import <Cocoa/Cocoa.h>
     NSString *nvmDir = [home stringByAppendingPathComponent:@".nvm/versions/node"];
     NSArray<NSString *> *versions = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:nvmDir error:nil];
     if (versions) {
-        NSArray<NSString *> *sorted = [versions sortedArrayUsingSelector:@selector(compare:)];
+        NSArray<NSString *> *sorted = [versions sortedArrayUsingSelector:@selector(localizedStandardCompare:)];
         for (NSString *v in [sorted reverseObjectEnumerator]) {
             NSString *nvmNode = [[nvmDir stringByAppendingPathComponent:v] stringByAppendingPathComponent:@"bin/node"];
-            [candidates insertObject:nvmNode atIndex:0];
+            [candidates addObject:nvmNode];
         }
     }
 

@@ -40,22 +40,46 @@ export const INITIAL_WORKTREES: WorktreeInfo[] = [
   },
 ];
 
+const RECENT_TITLES = [
+  '部署 Sites 并公开访问',
+  '新聊天',
+  '确保所有人可见',
+  '解决配音问题',
+  '确认配置冲突是否解决',
+  '确认问题是否已解决',
+  '同步一下版本',
+  'https://github.com/Pluviobyte/dot2ap',
+  '创建一个 HTML，内容是 SVG 绘制一个',
+  '详细检查代码库',
+  '对比 DeepSeek 会员人民币价格',
+  '解释这是什么',
+  '识别霞浦海边的红色物体',
+  '制定微信分享对象',
+  'Clarify Chinese question',
+  '解释 Claude Code 的 iOS 功能',
+  '查询各国 OpenAI 100 美元价格',
+  '修复移动端颜色异常',
+  '查看实际访问人数',
+  '审计并优化项目性能',
+];
+
 export const INITIAL_THREADS: Thread[] = [
   {
     id: 'thr_workspace_main',
     projectId: 'proj_codex_desktop',
-    title: '新会话 · codex-test',
+    title: '新聊天',
     pinned: false,
     status: 'completed',
     worktreeId: 'wt_main',
     branch: 'main',
     cwd: '/Users/zhangjinhui/Desktop/codex-test',
     environmentMode: 'local',
-    permissionMode: 'workspace-write',
+    permissionMode: 'full-access',
+    daybreakEnabled: false,
     goal: null,
-    model: 'gpt-5.4',
+    model: 'gpt-6.1-sol',
     personality: 'pragmatic',
-    reasoningEffort: 'high',
+    reasoningEffort: 'xhigh',
     subagent: 'default',
     updatedAt: '刚刚',
     tokenUsage: '0 tokens',
@@ -67,6 +91,56 @@ export const INITIAL_THREADS: Thread[] = [
     turns: [],
     changedFiles: [],
   },
+  ...RECENT_TITLES.map((title, idx) => ({
+    id: `thr_recent_${idx}`,
+    projectId: 'proj_codex_desktop',
+    title,
+    pinned: false,
+    isLocalCliSession: true,
+    status: 'completed' as const,
+    worktreeId: 'wt_main',
+    branch: 'main',
+    cwd: '/Users/zhangjinhui/Desktop/codex-test',
+    environmentMode: 'local' as const,
+    permissionMode: 'full-access' as const,
+    daybreakEnabled: false,
+    goal: null,
+    model: 'gpt-6.1-sol',
+    personality: 'pragmatic' as const,
+    reasoningEffort: 'xhigh' as const,
+    subagent: 'default',
+    updatedAt: '最近',
+    tokenUsage: 'Local CLI session',
+    diffSummary: {
+      files: 0,
+      additions: 0,
+      deletions: 0,
+    },
+    turns:
+      title === '新聊天'
+        ? []
+        : [
+            {
+              id: `turn_recent_${idx}`,
+              threadId: `thr_recent_${idx}`,
+              status: 'completed' as const,
+              startedAt: new Date(Date.now() - (idx + 1) * 3600000).toISOString(),
+              model: 'gpt-6.1-sol',
+              personality: 'pragmatic' as const,
+              reasoningEffort: 'xhigh' as const,
+              items: [
+                {
+                  id: `item_usr_recent_${idx}`,
+                  type: 'userMessage' as const,
+                  status: 'completed' as const,
+                  timestamp: '10:00:00',
+                  text: title,
+                },
+              ],
+            },
+          ],
+    changedFiles: [],
+  })),
 ];
 
 export const INITIAL_SKILLS: SkillDefinition[] = [
@@ -148,7 +222,7 @@ description: 生产环境构建校验与部署预检技能。
 export const INITIAL_AUTOMATIONS: AutomationJob[] = [
   {
     id: 'auto_ci_triage',
-    name: '每日构建与类型健康检查 (Daily Build Check)',
+    name: '灰太狼 · 自动化巡检与构建守护',
     projectId: 'proj_codex_desktop',
     scheduleCron: '0 9 * * 1-5',
     scheduleLabel: '工作日 09:00',
@@ -160,7 +234,7 @@ export const INITIAL_AUTOMATIONS: AutomationJob[] = [
     lastRunAt: '就绪',
     nextRunAt: '明日 09:00',
     status: 'idle',
-    totalRuns: 0,
+    totalRuns: 6,
   },
 ];
 
@@ -171,8 +245,8 @@ export const INITIAL_SUBAGENTS: SubagentConfig[] = [
     id: 'sub_default',
     name: 'default',
     description: '主协调智能体，负责代码规划、读写实现与命令验证。',
-    model: 'gpt-5.4',
-    sandboxMode: 'workspace-write',
+    model: 'gpt-6.1-sol',
+    sandboxMode: 'full-access',
     developerInstructions: '遵循 AGENTS.md 规范，修改后执行验证。',
     tomlPath: '.codex/agents/default.toml',
     isBuiltIn: true,
@@ -181,9 +255,9 @@ export const INITIAL_SUBAGENTS: SubagentConfig[] = [
 ];
 
 export const INITIAL_SANDBOX_POLICY: SandboxPolicy = {
-  mode: 'workspace-write',
-  networkAccess: 'cached-web',
-  approvalPolicy: 'on-risk',
+  mode: 'full-access',
+  networkAccess: 'enabled',
+  approvalPolicy: 'never',
   allowedCommands: [
     'git status',
     'git diff',

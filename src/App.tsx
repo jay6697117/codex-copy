@@ -55,7 +55,7 @@ import { MainFeatureViews } from './components/MainFeatureViews';
 import { CommandPaletteModal, RpcInspectorModal } from './components/Modals';
 import { t, SKIN_METAS } from './i18n/translations';
 
-const VALID_SKINS: ThemeSkin[] = ['wechat', 'qq', 'dingtalk'];
+const VALID_SKINS: ThemeSkin[] = ['codex', 'wechat', 'qq', 'dingtalk'];
 const VALID_LANGS: AppLanguage[] = ['zh-CN', 'en-US'];
 
 export function App() {
@@ -65,17 +65,17 @@ export function App() {
     return saved && VALID_LANGS.includes(saved) ? saved : 'zh-CN';
   });
 
-  // 2. Default WeChat Skin (`wechat`), switchable to QQ (`qq`) and DingTalk (`dingtalk`) in Settings
+  // 2. Default Native Codex Dark Skin (`codex`), switchable to WeChat (`wechat`), QQ (`qq`), and DingTalk (`dingtalk`) in Settings
   const [skin, setSkin] = useState<ThemeSkin>(() => {
-    const saved = localStorage.getItem('codex_desktop_skin_v2') as ThemeSkin | null;
-    return saved && VALID_SKINS.includes(saved) ? saved : 'wechat';
+    const saved = localStorage.getItem('codex_desktop_skin_v3') as ThemeSkin | null;
+    return saved && VALID_SKINS.includes(saved) ? saved : 'codex';
   });
 
   const i18n = t(lang);
 
   useEffect(() => {
     document.documentElement.setAttribute('data-skin', skin);
-    localStorage.setItem('codex_desktop_skin_v2', skin);
+    localStorage.setItem('codex_desktop_skin_v3', skin);
   }, [skin]);
 
   useEffect(() => {
@@ -390,6 +390,7 @@ export function App() {
       attachedFiles,
       invokedSkills,
       model: targetThread.model,
+      daybreakEnabled: targetThread.daybreakEnabled,
       personality: targetThread.personality,
       reasoningEffort: targetThread.reasoningEffort,
       subagent: targetThread.subagent,
@@ -487,21 +488,22 @@ export function App() {
   const handleCreateNewThread = (projectId?: string) => {
     const targetProjId = projectId || activeProject.id;
     const defaultModel =
-      localCodexStatus?.config?.effective?.model || 'gpt-5.4';
+      localCodexStatus?.config?.effective?.model || 'gpt-6.1-sol';
     const defaultEffort =
-      (localCodexStatus?.config?.effective?.reasoningEffort as any) || 'high';
+      (localCodexStatus?.config?.effective?.reasoningEffort as any) || 'xhigh';
 
     const newThread: Thread = {
       id: `thr_${Date.now()}`,
       projectId: targetProjId,
-      title: lang === 'zh-CN' ? '新建会话' : 'New thread',
+      title: lang === 'zh-CN' ? '新聊天' : 'New chat',
       pinned: false,
       status: 'completed',
       worktreeId: 'wt_main',
       branch: activeThread?.branch || 'main',
       cwd: activeProject.repoPath,
       environmentMode: 'local',
-      permissionMode: 'workspace-write',
+      permissionMode: 'full-access',
+      daybreakEnabled: false,
       model: defaultModel,
       personality: 'pragmatic',
       reasoningEffort: defaultEffort,

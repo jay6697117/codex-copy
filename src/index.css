@@ -3,13 +3,40 @@
 @tailwind utilities;
 
 /* ============================================================================
-   3 Curated Desktop App Theme Skins:
-     1. wechat   (Default) — 微信桌面版经典温润灰白 + 微信品牌绿 (#07C160) + 荧光绿气泡 (#95EC69)
-     2. qq                 — 腾讯 QQ NT 桌面版冰川蓝灰 + 企鹅天蓝 (#0099FF) + 灵动渐变顶栏
-     3. dingtalk           — 钉钉企业级深色工作台 (#101622 / #161E2E) + 钉钉商务蓝 (#0089FF)
+   Desktop App Theme Skins:
+     1. codex    (Default) — 1:1 复刻本机真实 OpenAI Codex Desktop App 原生暗黑界面 (#111111 / #181818 / #232325)
+     2. wechat             — 微信桌面版经典温润灰白 + 微信品牌绿 (#07C160) + 荧光绿气泡 (#95EC69)
+     3. qq                 — 腾讯 QQ NT 桌面版冰川蓝灰 + 企鹅天蓝 (#0099FF) + 灵动渐变顶栏
+     4. dingtalk           — 钉钉企业级深色工作台 (#101622 / #161E2E) + 钉钉商务蓝 (#0089FF)
    ============================================================================ */
 
 :root,
+[data-skin='codex'] {
+  color-scheme: dark;
+  --bg-app: #111111;
+  --bg-sidebar: #181818;
+  --bg-header: #161616;
+  --bg-elevated: #262628;
+  --bg-card: #1e1e20;
+  --bg-composer: #232325;
+  --bg-code: #141416;
+  --bg-hover: rgba(255, 255, 255, 0.06);
+  --bg-active: rgba(255, 255, 255, 0.1);
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.14);
+  --text-primary: #ececec;
+  --text-secondary: #a1a1a6;
+  --text-muted: #6e6e73;
+  --accent-primary: #2b7fff;
+  --accent-btn-bg: #2b7fff;
+  --accent-btn-text: #ffffff;
+  --user-bubble-bg: #2a2a2d;
+  --user-bubble-text: #f5f5f7;
+  --user-bubble-border: rgba(255, 255, 255, 0.08);
+  --agent-bubble-bg: #18181a;
+  --agent-bubble-text: #ececec;
+}
+
 [data-skin='wechat'] {
   color-scheme: light;
   --bg-app: #f5f5f5;
@@ -31,6 +58,9 @@
   --accent-btn-text: #ffffff;
   --user-bubble-bg: #95ec69;
   --user-bubble-text: #111111;
+  --user-bubble-border: rgba(0, 0, 0, 0.06);
+  --agent-bubble-bg: #ffffff;
+  --agent-bubble-text: #191919;
 }
 
 [data-skin='qq'] {
@@ -54,6 +84,9 @@
   --accent-btn-text: #ffffff;
   --user-bubble-bg: #0099ff;
   --user-bubble-text: #ffffff;
+  --user-bubble-border: rgba(0, 153, 255, 0.2);
+  --agent-bubble-bg: #ffffff;
+  --agent-bubble-text: #03081a;
 }
 
 [data-skin='dingtalk'] {
@@ -77,6 +110,9 @@
   --accent-btn-text: #ffffff;
   --user-bubble-bg: #0089ff;
   --user-bubble-text: #ffffff;
+  --user-bubble-border: rgba(0, 137, 255, 0.3);
+  --agent-bubble-bg: #1d273b;
+  --agent-bubble-text: #f0f4fa;
 }
 
 @layer base {
@@ -101,7 +137,6 @@
   }
 }
 
-/* Theme utility classes */
 .codex-app-bg {
   background-color: var(--bg-app);
   color: var(--text-primary);
@@ -131,7 +166,7 @@
   border-color: var(--border-subtle);
 }
 
-.codex-composer {
+.codex-composer-bg {
   background-color: var(--bg-composer);
   border-color: var(--border-strong);
 }
@@ -164,12 +199,16 @@
   color: var(--accent-primary);
 }
 
-.codex-accent-bg {
-  background-color: var(--accent-primary);
+.codex-accent-btn {
+  background-color: var(--accent-btn-bg);
   color: var(--accent-btn-text);
 }
 
-/* Custom subtle scrollbars for desktop feel */
+.codex-accent-soft {
+  background-color: rgba(43, 127, 255, 0.14);
+  color: var(--accent-primary);
+}
+
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -180,12 +219,12 @@
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(148, 163, 184, 0.28);
+  background: rgba(148, 163, 184, 0.24);
   border-radius: 9999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(148, 163, 184, 0.45);
+  background: rgba(148, 163, 184, 0.42);
 }
 
 .app-drag-region {

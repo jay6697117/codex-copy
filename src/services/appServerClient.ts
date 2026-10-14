@@ -369,6 +369,7 @@ export function runInteractiveAgentTurn(params: {
   attachedFiles: string[];
   invokedSkills: string[];
   model: ModelId;
+  daybreakEnabled?: boolean;
   personality: PersonalityMode;
   reasoningEffort: ReasoningEffort;
   subagent: string;
@@ -438,6 +439,7 @@ export function runInteractiveAgentTurn(params: {
           attachedFiles: params.attachedFiles,
           invokedSkills: params.invokedSkills,
           model: params.model,
+          daybreakEnabled: params.daybreakEnabled,
           reasoningEffort: params.reasoningEffort,
           sandboxMode: params.sandboxPolicy.mode,
           cwd: params.cwd,

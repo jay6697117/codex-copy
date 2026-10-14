@@ -17,15 +17,31 @@ export interface SkinMeta {
 
 export const SKIN_METAS: SkinMeta[] = [
   {
+    id: 'codex',
+    nameZh: '原生 Codex 暗黑 (Codex Native Dark)',
+    nameEn: 'Codex Native Dark (Default)',
+    descZh:
+      '1:1 复刻本机真实 OpenAI Codex Desktop App 原生深邃暗黑工作台（#111111 主画布 / #181818 侧边栏 / #232325 悬浮输入框 / #2B7FFF 电光蓝滑块）。',
+    descEn:
+      '1:1 authentic OpenAI Codex Desktop App dark interface (#111111 canvas / #181818 sidebar / #232325 composer / #2B7FFF accent).',
+    badgeZh: '原生默认',
+    badgeEn: 'Native Default',
+    canvasHex: '#111111',
+    sidebarHex: '#181818',
+    accentHex: '#2B7FFF',
+    bubbleHex: '#2A2A2D',
+    colors: ['#181818', '#111111', '#2B7FFF'],
+  },
+  {
     id: 'wechat',
     nameZh: '微信皮肤 (WeChat)',
-    nameEn: 'WeChat Skin (Default)',
+    nameEn: 'WeChat Skin',
     descZh:
       '遵循 WeDesign 与 TDesign 规范，复刻微信桌面版经典温润灰白界面（#F5F5F5 画布 / #EAEAEA 侧栏），搭配微信品牌绿（#07C160）与标志性浅绿聊天气泡（#95EC69）。',
     descEn:
       'Classic WeChat Desktop palette (#F5F5F5 canvas / #EAEAEA sidebar) with iconic WeChat Green (#07C160) and #95EC69 message bubbles.',
-    badgeZh: '默认推荐',
-    badgeEn: 'Default',
+    badgeZh: '经典浅色',
+    badgeEn: 'Light',
     canvasHex: '#F5F5F5',
     sidebarHex: '#EAEAEA',
     accentHex: '#07C160',
